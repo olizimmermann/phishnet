@@ -402,11 +402,10 @@ def run_kitphishr(url: str, binary: str, output_dir: str) -> dict:
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     try:
         result = subprocess.run(
-            [binary, "-d", url],
+            [binary, "-d", "-v", "-o", output_dir, url],
             capture_output=True,
             text=True,
             timeout=120,
-            cwd=output_dir,
         )
         output = (result.stdout + result.stderr).strip()
         zips = sorted(Path(output_dir).glob("*.zip"), key=lambda p: p.stat().st_mtime)
