@@ -1,6 +1,6 @@
 # phishnet
 
-A Python tool that aggregates phishing URLs from multiple threat intel feeds, deduplicates them, tracks them in a SQLite database, crawls each new URL for HTTP/TLS metadata, and optionally downloads phishing kits via [kitphisr](https://github.com/cybercdh/kitphisr).
+A Python tool that aggregates phishing URLs from multiple threat intel feeds, deduplicates them, tracks them in a SQLite database, crawls each new URL for HTTP/TLS metadata, and optionally downloads phishing kits via [kitphishr](https://github.com/cybercdh/kitphishr).
 
 ---
 
@@ -16,14 +16,14 @@ A Python tool that aggregates phishing URLs from multiple threat intel feeds, de
 - Browser-realistic headers (`Accept`, `Sec-Fetch-*`, etc.) to avoid trivial bot detection
 - Retry logic, proxy support, configurable timeouts, optional response body capture
 - Runs **once** (cron-friendly) or as a **daemon** with an internal scheduler
-- Runs **kitphisr -d** on each new URL to download phishing kits, stores zip path and output in DB
+- Runs **kitphishr -d** on each new URL to download phishing kits, stores zip path and output in DB
 
 ---
 
 ## Requirements
 
 - Python 3.11+
-- [kitphisr](https://github.com/cybercdh/kitphisr) in `$PATH` (or set `kitphisr_bin` in config)
+- [kitphishr](https://github.com/cybercdh/kitphishr) in `$PATH` (or set `kitphishr_bin` in config)
 
 ```bash
 pip install -r requirements.txt
@@ -57,7 +57,7 @@ python collector.py --crawl-all
 | `data/phishing_urls.txt.bak` | Previous run's list — **overwritten every run** |
 | `data/new_phishing_urls_YYYYMMDD_HHMMSS.txt` | URLs new to this run — **kept forever** |
 | `data/phishnet.db` | SQLite database — see schema below |
-| `data/kits/` | Phishing kit zip files downloaded by kitphisr |
+| `data/kits/` | Phishing kit zip files downloaded by kitphishr |
 | `data/collector.log` | Log file (if configured) |
 
 ---
@@ -73,9 +73,9 @@ settings:
   interval_hours: 6            # daemon mode run interval
   data_dir: ./data             # root for all output files
   db_path: ./data/phishnet.db
-  run_kitphisr: true           # set false to skip kit downloads
-  kitphisr_bin: kitphisr       # path to kitphisr binary
-  kitphisr_output_dir: ./data/kits
+  run_kitphishr: true           # set false to skip kit downloads
+  kitphishr_bin: kitphishr       # path to kitphishr binary
+  kitphishr_output_dir: ./data/kits
   log_level: INFO              # DEBUG | INFO | WARNING | ERROR
   log_file: ./data/collector.log  # omit or set null for stdout only
 ```
@@ -198,10 +198,10 @@ One row per crawl attempt. A URL may be crawled multiple times (e.g. with `--cra
 | `cert_valid_to` | TEXT | TLS cert notAfter |
 | `cert_san` | TEXT | Subject Alternative Names as JSON array |
 | `cert_fingerprint` | TEXT | SHA-256 fingerprint of the DER cert |
-| `kitphisr_ran` | INTEGER | 1 if kitphisr was invoked |
-| `kitphisr_status` | TEXT | `success`, `exit:N`, `timeout`, `binary_not_found` |
-| `kitphisr_zip` | TEXT | Path to the downloaded zip file |
-| `kitphisr_output` | TEXT | Combined stdout/stderr from kitphisr (truncated at 8 KB) |
+| `kitphishr_ran` | INTEGER | 1 if kitphishr was invoked |
+| `kitphishr_status` | TEXT | `success`, `exit:N`, `timeout`, `binary_not_found` |
+| `kitphishr_zip` | TEXT | Path to the downloaded zip file |
+| `kitphishr_output` | TEXT | Combined stdout/stderr from kitphishr (truncated at 8 KB) |
 
 ---
 
@@ -244,10 +244,10 @@ SELECT u.url, c.cert_issuer, c.cert_valid_to
 FROM crawls c JOIN urls u ON u.id = c.url_id
 WHERE c.cert_issuer LIKE '%Let%Encrypt%';
 
--- URLs where kitphisr successfully downloaded a kit
-SELECT u.url, c.kitphisr_zip, c.crawl_date
+-- URLs where kitphishr successfully downloaded a kit
+SELECT u.url, c.kitphishr_zip, c.crawl_date
 FROM crawls c JOIN urls u ON u.id = c.url_id
-WHERE c.kitphisr_status = 'success'
+WHERE c.kitphishr_status = 'success'
 ORDER BY c.crawl_date DESC;
 
 -- Redirect chains
@@ -271,5 +271,5 @@ phishnet/
     ├── phishing_urls.txt.bak
     ├── new_phishing_urls_YYYYMMDD_HHMMSS.txt
     ├── collector.log
-    └── kits/               # kitphisr zip downloads
+    └── kits/               # kitphishr zip downloads
 ```

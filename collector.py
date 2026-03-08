@@ -79,11 +79,11 @@ CREATE TABLE IF NOT EXISTS crawls (
     cert_san            TEXT,       -- JSON array of SANs
     cert_fingerprint    TEXT,       -- SHA-256 hex
 
-    -- kitphisr
-    kitphisr_ran        INTEGER DEFAULT 0,
-    kitphisr_status     TEXT,
-    kitphisr_zip        TEXT,
-    kitphisr_output     TEXT
+    -- kitphishr
+    kitphishr_ran        INTEGER DEFAULT 0,
+    kitphishr_status     TEXT,
+    kitphishr_zip        TEXT,
+    kitphishr_output     TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_crawls_url_id   ON crawls(url_id);
@@ -98,7 +98,7 @@ _CRAWL_COLS = [
     "server", "x_powered_by", "response_headers", "response_body",
     "cert_subject", "cert_issuer", "cert_valid_from", "cert_valid_to",
     "cert_san", "cert_fingerprint",
-    "kitphisr_ran", "kitphisr_status", "kitphisr_zip", "kitphisr_output",
+    "kitphishr_ran", "kitphishr_status", "kitphishr_zip", "kitphishr_output",
 ]
 
 
@@ -396,9 +396,9 @@ def crawl_url(url: str, ua: str, crawl_cfg: dict) -> dict:
     return data
 
 
-# ─── kitphisr ────────────────────────────────────────────────────────────────
+# ─── kitphishr ────────────────────────────────────────────────────────────────
 
-def run_kitphisr(url: str, binary: str, output_dir: str) -> dict:
+def run_kitphishr(url: str, binary: str, output_dir: str) -> dict:
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     try:
         result = subprocess.run(
@@ -413,19 +413,19 @@ def run_kitphisr(url: str, binary: str, output_dir: str) -> dict:
         zip_path = str(zips[-1]) if zips else None
         status = "success" if result.returncode == 0 else f"exit:{result.returncode}"
         return {
-            "kitphisr_ran": 1,
-            "kitphisr_status": status,
-            "kitphisr_zip": zip_path,
-            "kitphisr_output": output[:8192],
+            "kitphishr_ran": 1,
+            "kitphishr_status": status,
+            "kitphishr_zip": zip_path,
+            "kitphishr_output": output[:8192],
         }
     except FileNotFoundError:
-        log.warning("kitphisr not found at '%s' — skipping", binary)
-        return {"kitphisr_ran": 0, "kitphisr_status": "binary_not_found"}
+        log.warning("kitphishr not found at '%s' — skipping", binary)
+        return {"kitphishr_ran": 0, "kitphishr_status": "binary_not_found"}
     except subprocess.TimeoutExpired:
-        return {"kitphisr_ran": 1, "kitphisr_status": "timeout",
-                "kitphisr_output": "Process timed out after 120s"}
+        return {"kitphishr_ran": 1, "kitphishr_status": "timeout",
+                "kitphishr_output": "Process timed out after 120s"}
     except Exception as exc:
-        return {"kitphisr_ran": 1, "kitphisr_status": f"error: {exc}"}
+        return {"kitphishr_ran": 1, "kitphishr_status": f"error: {exc}"}
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -450,9 +450,9 @@ def run_collection(cfg: dict, crawl_all: bool = False):
 
     db_path       = s.get("db_path", str(data_dir / "phishnet.db"))
     do_crawl      = crawl_cfg.get("timeout") is not None or s.get("crawl_new_urls", True)
-    do_kitphisr   = bool(s.get("run_kitphisr", True))
-    kitphisr_bin  = s.get("kitphisr_bin", "kitphisr")
-    kitphisr_dir  = s.get("kitphisr_output_dir", str(data_dir / "kits"))
+    do_kitphishr   = bool(s.get("run_kitphishr", True))
+    kitphishr_bin  = s.get("kitphishr_bin", "kitphishr")
+    kitphishr_dir  = s.get("kitphishr_output_dir", str(data_dir / "kits"))
 
     current_file = data_dir / "phishing_urls.txt"
     backup_file  = data_dir / "phishing_urls.txt.bak"
@@ -501,7 +501,7 @@ def run_collection(cfg: dict, crawl_all: bool = False):
     conn.commit()
     log.info("DB: %d URLs to crawl/process this run", len(urls_to_process))
 
-    # ── 6. Crawl + kitphisr ───────────────────────────────────────────────────
+    # ── 6. Crawl + kitphishr ───────────────────────────────────────────────────
     for i, (url_id, url) in enumerate(urls_to_process, 1):
         ua = pick_ua(ua_cfg)
         log.info("[%d/%d] %s  (UA: %s)", i, len(urls_to_process), url, ua[:60])
@@ -511,8 +511,8 @@ def run_collection(cfg: dict, crawl_all: bool = False):
         if do_crawl:
             crawl_data = crawl_url(url, ua, crawl_cfg)
 
-        if do_kitphisr:
-            k = run_kitphisr(url, kitphisr_bin, kitphisr_dir)
+        if do_kitphishr:
+            k = run_kitphishr(url, kitphishr_bin, kitphishr_dir)
             crawl_data.update(k)
 
         db_insert_crawl(conn, url_id, crawl_data)

@@ -8,14 +8,14 @@ settings:
   # SQLite DB path
   db_path: ./data/phishnet.db
 
-  # Run kitphisr on each new URL
-  run_kitphisr: true
+  # Run kitphishr on each new URL
+  run_kitphishr: true
 
-  # Path to kitphisr binary
-  kitphisr_bin: kitphisr
+  # Path to kitphishr binary
+  kitphishr_bin: kitphishr
 
-  # Where kitphisr drops its zip files
-  kitphisr_output_dir: ./data/kits
+  # Where kitphishr drops its zip files
+  kitphishr_output_dir: ./data/kits
 
   # Log level: DEBUG, INFO, WARNING, ERROR
   log_level: INFO
