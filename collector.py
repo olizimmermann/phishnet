@@ -25,6 +25,7 @@ import ssl
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
@@ -459,6 +460,25 @@ def _ts() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
 
+# ─── Per-URL worker (runs in thread pool) ────────────────────────────────────
+
+def _process_url(
+    url_id: int, url: str,
+    ua_cfg: dict, crawl_cfg: dict,
+    do_crawl: bool, do_kitphishr: bool,
+    kitphishr_bin: str, kitphishr_dir: str,
+) -> tuple[int, dict]:
+    ua = pick_ua(ua_cfg)
+    log.info("  Crawling %s  (UA: %s)", url, ua[:60])
+    crawl_data: dict = {"crawl_date": _utcnow(), "user_agent_used": ua, "final_url": url}
+    if do_crawl:
+        crawl_data = crawl_url(url, ua, crawl_cfg)
+    if do_kitphishr:
+        log.info("  Running kitphishr on %s", url)
+        crawl_data.update(run_kitphishr(url, kitphishr_bin, kitphishr_dir))
+    return url_id, crawl_data
+
+
 # ─── Main collection run ──────────────────────────────────────────────────────
 
 def run_collection(cfg: dict, crawl_all: bool = False):
@@ -522,22 +542,31 @@ def run_collection(cfg: dict, crawl_all: bool = False):
     conn.commit()
     log.info("DB: %d URLs to crawl/process this run", len(urls_to_process))
 
-    # ── 6. Crawl + kitphishr ───────────────────────────────────────────────────
-    for i, (url_id, url) in enumerate(urls_to_process, 1):
-        ua = pick_ua(ua_cfg)
-        log.info("[%d/%d] %s  (UA: %s)", i, len(urls_to_process), url, ua[:60])
+    # ── 6. Crawl + kitphishr (parallel) ──────────────────────────────────────
+    workers = int(s.get("crawl_workers", 5))
+    total   = len(urls_to_process)
+    log.info("Processing %d URLs with %d workers", total, workers)
 
-        crawl_data: dict = {"crawl_date": _utcnow(), "user_agent_used": ua, "final_url": url}
-
-        if do_crawl:
-            crawl_data = crawl_url(url, ua, crawl_cfg)
-
-        if do_kitphishr:
-            log.info("  Running kitphishr on %s", url)
-            k = run_kitphishr(url, kitphishr_bin, kitphishr_dir)
-            crawl_data.update(k)
-
-        db_insert_crawl(conn, url_id, crawl_data)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        future_to_url = {
+            executor.submit(
+                _process_url,
+                url_id, url, ua_cfg, crawl_cfg,
+                do_crawl, do_kitphishr, kitphishr_bin, kitphishr_dir,
+            ): url
+            for url_id, url in urls_to_process
+        }
+        done = 0
+        for future in as_completed(future_to_url):
+            url = future_to_url[future]
+            done += 1
+            try:
+                result_id, crawl_data = future.result()
+                db_insert_crawl(conn, result_id, crawl_data)
+                log.info("[%d/%d] saved %s  status=%s",
+                         done, total, url, crawl_data.get("http_status", "-"))
+            except Exception as exc:
+                log.error("[%d/%d] failed %s — %s", done, total, url, exc)
 
     conn.close()
     log.info("=" * 60)

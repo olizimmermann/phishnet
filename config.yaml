@@ -23,6 +23,9 @@ settings:
   # Log file (leave empty to log to stdout only)
   log_file: ./data/collector.log
 
+  # Number of parallel workers for crawling + kitphishr
+  crawl_workers: 5
+
 
 # ─── User-Agent configuration ─────────────────────────────────────────────────
 user_agents:
