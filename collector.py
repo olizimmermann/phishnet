@@ -679,12 +679,19 @@ def _process_url(
     ua_cfg: dict, crawl_cfg: dict,
     do_kit_hunt: bool, kit_dir: str,
 ) -> tuple[str, dict]:
+    # Kit hunt first — crawl metadata only collected when a kit is found
+    # so we don't waste network requests on the majority of URLs
+    if do_kit_hunt:
+        log.info("  Hunting kit for %s", url)
+        kit_data = find_phishing_kit(url, crawl_cfg, kit_dir)
+        if kit_data.get("kitphishr_status") != "success":
+            return url, kit_data
+
     ua = pick_ua(ua_cfg)
     log.info("  Crawling %s  (UA: %s)", url, ua[:60])
-    crawl_data: dict = {"crawl_date": _utcnow(), "user_agent_used": ua, "final_url": url}
     crawl_data = crawl_url(url, ua, crawl_cfg)
     if do_kit_hunt:
-        crawl_data.update(find_phishing_kit(url, crawl_cfg, kit_dir))
+        crawl_data.update(kit_data)
     return url, crawl_data
 
 
