@@ -17,6 +17,7 @@ import json
 import logging
 import random
 import shutil
+import os
 import signal
 import socket
 import sqlite3
@@ -416,16 +417,25 @@ def crawl_url(url: str, ua: str, crawl_cfg: dict) -> dict:
 def run_kitphishr(url: str, binary: str, output_dir: str) -> dict:
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             [binary, "-d", "-v", "-o", output_dir, url],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=120,
+            preexec_fn=os.setsid,   # new process group so we can kill the whole tree
         )
-        output = (result.stdout + result.stderr).strip()
+        try:
+            stdout, stderr = proc.communicate(timeout=120)
+        except subprocess.TimeoutExpired:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            stdout, stderr = proc.communicate()
+            return {"kitphishr_ran": 1, "kitphishr_status": "timeout",
+                    "kitphishr_output": "Process timed out after 120s"}
+
+        output = (stdout + stderr).strip()
         zips = sorted(Path(output_dir).glob("*.zip"), key=lambda p: p.stat().st_mtime)
         zip_path = str(zips[-1]) if zips else None
-        status = "success" if result.returncode == 0 else f"exit:{result.returncode}"
+        status = "success" if proc.returncode == 0 else f"exit:{proc.returncode}"
         return {
             "kitphishr_ran": 1,
             "kitphishr_status": status,
@@ -435,9 +445,6 @@ def run_kitphishr(url: str, binary: str, output_dir: str) -> dict:
     except FileNotFoundError:
         log.warning("kitphishr not found at '%s' — skipping", binary)
         return {"kitphishr_ran": 0, "kitphishr_status": "binary_not_found"}
-    except subprocess.TimeoutExpired:
-        return {"kitphishr_ran": 1, "kitphishr_status": "timeout",
-                "kitphishr_output": "Process timed out after 120s"}
     except Exception as exc:
         return {"kitphishr_ran": 1, "kitphishr_status": f"error: {exc}"}
 
