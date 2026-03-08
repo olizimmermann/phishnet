@@ -1,6 +1,6 @@
 # phishnet
 
-A Python tool that aggregates phishing URLs from multiple threat intel feeds, deduplicates them, crawls each new URL for HTTP/TLS metadata and fingerprinting data, hunts for phishing kit zips, and optionally submits confirmed kit URLs to urlscan.io. Only URLs where a kit is found are persisted to the SQLite database.
+A Python tool that aggregates phishing URLs from multiple threat intel feeds, deduplicates them, and hunts for phishing kit zips. Only URLs where a kit is found are crawled for HTTP/TLS metadata and fingerprinting data, persisted to SQLite, and optionally submitted to urlscan.io.
 
 ---
 
@@ -11,8 +11,9 @@ A Python tool that aggregates phishing URLs from multiple threat intel feeds, de
 - **Seen-URL accumulator** — `phishing_urls.txt` only ever grows; feed outages never trigger re-crawls of already-processed URLs
 - Bails out safely if all feeds return zero URLs to prevent corrupting history
 - **SQLite database** stores only URLs where a phishing kit was found, plus full crawl metadata
-- **Crawls** each new URL: HTTP status, redirect chain, response headers, server info, TLS cert details
-- **Fingerprinting** fields extracted from every response: resolved IP, page title, form action URL
+- **Kit hunt runs first** — HTTP crawl only happens if a kit is found, saving requests on the majority of URLs
+- **Crawls** kit-hit URLs: HTTP status, redirect chain, response headers, server info, TLS cert details
+- **Fingerprinting** fields extracted from kit-hit responses: resolved IP, page title, form action URL
 - **Parallel crawling** via `ThreadPoolExecutor`; worker count is configurable
 - **Kit hunter** — pure Python port of [kitphishr](https://github.com/cybercdh/kitphishr): walks path segments, probes `.zip` variants and Apache/Nginx open directory listings, downloads and saves confirmed kit zips
 - **urlscan.io** — automatically submits kit-hit URLs for scanning (configurable visibility and tags)
