@@ -698,19 +698,26 @@ def run_collection(cfg: dict, crawl_all: bool = False):
 
     log.info("Total unique URLs collected from feeds: %d", len(all_urls))
 
-    # ── 2. Diff against previous run ─────────────────────────────────────────
+    if not all_urls:
+        log.warning("No URLs returned from any feed — skipping run to avoid corrupting seen-URL history")
+        return
+
+    # ── 2. Load previously seen URLs (ever-growing accumulator) ──────────────
     previous_urls: set[str] = set()
     if current_file.exists():
         previous_urls = {u for u in current_file.read_text().splitlines() if u.strip()}
-        shutil.copy2(current_file, backup_file)
-        log.info("Backed up previous list (%d URLs) → %s", len(previous_urls), backup_file)
+        log.info("Previously seen URLs: %d", len(previous_urls))
 
     new_urls = all_urls - previous_urls
     log.info("New URLs this run: %d", len(new_urls))
 
-    # ── 3. Write current full list (replaced every run) ───────────────────────
-    current_file.write_text("\n".join(sorted(all_urls)) + "\n")
-    log.info("Full list written (%d URLs) → %s", len(all_urls), current_file)
+    # ── 3. Write union of all seen URLs (never shrinks on feed failure) ───────
+    # Using the union means URLs that disappear from a feed due to an outage
+    # won't be treated as "new" again when the feed recovers next run.
+    seen_urls = all_urls | previous_urls
+    shutil.copy2(current_file, backup_file) if current_file.exists() else None
+    current_file.write_text("\n".join(sorted(seen_urls)) + "\n")
+    log.info("Seen-URL list written (%d URLs) → %s", len(seen_urls), current_file)
 
     # ── 4. Write timestamped new-URL file (kept forever) ─────────────────────
     if new_urls:
