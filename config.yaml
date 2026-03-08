@@ -1,0 +1,143 @@
+settings:
+  # How often to run (hours) — used in daemon mode
+  interval_hours: 6
+
+  # Where to store data files and DB
+  data_dir: ./data
+
+  # SQLite DB path
+  db_path: ./data/phishnet.db
+
+  # Run kitphisr on each new URL
+  run_kitphisr: true
+
+  # Path to kitphisr binary
+  kitphisr_bin: kitphisr
+
+  # Where kitphisr drops its zip files
+  kitphisr_output_dir: ./data/kits
+
+  # Log level: DEBUG, INFO, WARNING, ERROR
+  log_level: INFO
+
+  # Log file (leave empty to log to stdout only)
+  log_file: ./data/collector.log
+
+
+# ─── User-Agent configuration ─────────────────────────────────────────────────
+user_agents:
+  # UA used when fetching feed lists themselves (set to null to rotate from pool)
+  feed_ua: "phishnet/1.0"
+
+  # Randomly rotate a UA from the pool for each crawl request.
+  # If false, the first entry in the pool is always used.
+  rotate: true
+
+  pool:
+    - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0"
+    - "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15"
+    - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0"
+    - "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1"
+    - "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+
+
+# ─── Crawling configuration ───────────────────────────────────────────────────
+crawling:
+  # HTTP request timeout (seconds) for crawling target phishing URLs
+  timeout: 20
+
+  # TLS handshake timeout (seconds), used for certificate probing
+  tls_timeout: 10
+
+  # Feed fetch timeout (seconds)
+  feed_timeout: 30
+
+  # Follow HTTP redirects when crawling
+  follow_redirects: true
+
+  # Maximum number of redirects to follow (requests default is 30, keep it sane)
+  max_redirects: 10
+
+  # Retry failed crawls this many times before giving up
+  retry_count: 2
+
+  # Seconds to wait between retries
+  retry_delay: 5
+
+  # Skip SSL certificate verification on target URLs (phishing sites often have bad certs)
+  verify_ssl: false
+
+  # Maximum response body size to download in bytes (5 MB). Larger bodies are truncated.
+  max_content_length: 5242880
+
+  # Store response body in the DB (can grow large; disable if disk space is a concern)
+  capture_body: false
+
+  # Max bytes of body to store per crawl when capture_body is true (100 KB)
+  body_max_bytes: 102400
+
+  # Optional HTTP/HTTPS proxy for crawling (leave null to disable)
+  proxy: null
+  # proxy:
+  #   http: "http://127.0.0.1:8080"
+  #   https: "http://127.0.0.1:8080"
+
+  # Extra headers sent with every crawl request (merged on top of User-Agent)
+  extra_headers:
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
+    Accept-Language: "en-US,en;q=0.9"
+    Accept-Encoding: "gzip, deflate, br"
+    DNT: "1"
+    Upgrade-Insecure-Requests: "1"
+    # Sec-Fetch-* make requests look more like a real browser
+    Sec-Fetch-Dest: "document"
+    Sec-Fetch-Mode: "navigate"
+    Sec-Fetch-Site: "none"
+    Sec-Fetch-User: "?1"
+
+
+# ─── Feeds ────────────────────────────────────────────────────────────────────
+feeds:
+  # ── Plain text feeds (one URL per line) ─────────────────────────────────────
+  - name: OpenPhish
+    url: https://openphish.com/feed.txt
+    type: txt
+
+  - name: URLhaus (text)
+    url: https://urlhaus.abuse.ch/downloads/text/
+    type: txt
+    comment_char: "#"
+
+  # ── CSV feeds ────────────────────────────────────────────────────────────────
+  - name: PhishStats
+    url: https://phishstats.info/phish_score.csv
+    type: csv
+    delimiter: ","
+    url_field: "#url"       # column header name (leading # stripped automatically)
+    comment_char: "#"
+
+  - name: PhishTank (CSV)
+    url: http://data.phishtank.com/data/online-valid.csv
+    type: csv
+    delimiter: ","
+    url_field: url          # column header name
+
+  # ── Per-feed user_agent override ─────────────────────────────────────────────
+  # Use this when a specific feed requires a particular UA (e.g., API token in UA)
+  # - name: Private Feed
+  #   url: https://example.com/phish.txt
+  #   type: txt
+  #   user_agent: "MyOrg-ThreatIntel/2.0 (token=abc123)"
+
+  # ── Column-index example ─────────────────────────────────────────────────────
+  # - name: My Custom Feed
+  #   url: https://example.com/phish.csv
+  #   type: csv
+  #   delimiter: ";"
+  #   url_field: 2          # zero-based column index (integer)
+  #   skip_rows: 1          # skip N rows before header/data detection
+  #   comment_char: "#"
+  #   user_agent: "custom-agent/1.0"
