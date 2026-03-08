@@ -270,7 +270,9 @@ def get_cert_info(hostname: str, port: int = 443, timeout: int = 10) -> dict:
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
         with socket.create_connection((hostname, port), timeout=timeout) as raw:
+            raw.settimeout(timeout)
             with ctx.wrap_socket(raw, server_hostname=hostname) as ssock:
+                ssock.settimeout(timeout)
                 cert = ssock.getpeercert()
                 der = ssock.getpeercert(binary_form=True)
         if not cert:
@@ -524,6 +526,7 @@ def run_collection(cfg: dict, crawl_all: bool = False):
             crawl_data = crawl_url(url, ua, crawl_cfg)
 
         if do_kitphishr:
+            log.info("  Running kitphishr on %s", url)
             k = run_kitphishr(url, kitphishr_bin, kitphishr_dir)
             crawl_data.update(k)
 
