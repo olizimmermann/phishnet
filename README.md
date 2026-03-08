@@ -1,29 +1,32 @@
 # phishnet
 
-A Python tool that aggregates phishing URLs from multiple threat intel feeds, deduplicates them, tracks them in a SQLite database, crawls each new URL for HTTP/TLS metadata, and optionally downloads phishing kits via [kitphishr](https://github.com/cybercdh/kitphishr).
+A Python tool that aggregates phishing URLs from multiple threat intel feeds, deduplicates them, crawls each new URL for HTTP/TLS metadata and fingerprinting data, hunts for phishing kit zips, and optionally submits confirmed kit URLs to urlscan.io. Only URLs where a kit is found are persisted to the SQLite database.
 
 ---
 
 ## Features
 
 - Ingests **TXT** and **CSV** feeds (configurable delimiter, column name or index)
-- **Deduplicates** across all feeds each run
-- **Diffs** against the previous run — new URLs are saved to a timestamped file and kept forever
-- Full-list `phishing_urls.txt` is replaced each run; the previous version is kept as `.bak`
-- **SQLite database** tracks every URL, when it was first seen, and all crawl results
-- **Crawls** each new URL: HTTP status, redirect chain, response headers, server info, TLS certificate details
+- **Deduplicates** across all feeds each run; scheme-less URLs (`evil.com/path`) are fixed automatically
+- **Seen-URL accumulator** — `phishing_urls.txt` only ever grows; feed outages never trigger re-crawls of already-processed URLs
+- Bails out safely if all feeds return zero URLs to prevent corrupting history
+- **SQLite database** stores only URLs where a phishing kit was found, plus full crawl metadata
+- **Crawls** each new URL: HTTP status, redirect chain, response headers, server info, TLS cert details
+- **Fingerprinting** fields extracted from every response: resolved IP, page title, form action URL
+- **Parallel crawling** via `ThreadPoolExecutor`; worker count is configurable
+- **Kit hunter** — pure Python port of [kitphishr](https://github.com/cybercdh/kitphishr): walks path segments, probes `.zip` variants and Apache/Nginx open directory listings, downloads and saves confirmed kit zips
+- **urlscan.io** — automatically submits kit-hit URLs for scanning (configurable visibility and tags)
 - **User-Agent rotation** from a configurable pool; per-feed UA overrides supported
 - Browser-realistic headers (`Accept`, `Sec-Fetch-*`, etc.) to avoid trivial bot detection
 - Retry logic, proxy support, configurable timeouts, optional response body capture
+- **Colored console output** — kit discoveries highlighted in green, warnings in yellow, errors in red
 - Runs **once** (cron-friendly) or as a **daemon** with an internal scheduler
-- Runs **kitphishr -d** on each new URL to download phishing kits, stores zip path and output in DB
 
 ---
 
 ## Requirements
 
 - Python 3.11+
-- [kitphishr](https://github.com/cybercdh/kitphishr) in `$PATH` (or set `kitphishr_bin` in config)
 
 ```bash
 pip install -r requirements.txt
@@ -43,7 +46,7 @@ python collector.py --config /etc/phish/config.yaml
 # Run as daemon (internal scheduler, no cron needed)
 python collector.py --daemon
 
-# Re-crawl all known URLs, not just new ones
+# Re-process all known URLs, not just new ones
 python collector.py --crawl-all
 ```
 
@@ -53,11 +56,11 @@ python collector.py --crawl-all
 
 | File | Description |
 |------|-------------|
-| `data/phishing_urls.txt` | Full deduplicated URL list — **replaced every run** |
-| `data/phishing_urls.txt.bak` | Previous run's list — **overwritten every run** |
+| `data/phishing_urls.txt` | Cumulative seen-URL list — **grows every run, never shrinks** |
+| `data/phishing_urls.txt.bak` | Previous run's list |
 | `data/new_phishing_urls_YYYYMMDD_HHMMSS.txt` | URLs new to this run — **kept forever** |
-| `data/phishnet.db` | SQLite database — see schema below |
-| `data/kits/` | Phishing kit zip files downloaded by kitphishr |
+| `data/phishnet.db` | SQLite database — **only kit-hit URLs** |
+| `data/kits/` | Downloaded phishing kit zip files |
 | `data/collector.log` | Log file (if configured) |
 
 ---
@@ -73,9 +76,9 @@ settings:
   interval_hours: 6            # daemon mode run interval
   data_dir: ./data             # root for all output files
   db_path: ./data/phishnet.db
-  run_kitphishr: true           # set false to skip kit downloads
-  kitphishr_bin: kitphishr       # path to kitphishr binary
-  kitphishr_output_dir: ./data/kits
+  run_kit_hunt: true           # set false to skip kit hunting
+  kit_output_dir: ./data/kits  # where downloaded zips are saved
+  crawl_workers: 5             # parallel worker threads
   log_level: INFO              # DEBUG | INFO | WARNING | ERROR
   log_file: ./data/collector.log  # omit or set null for stdout only
 ```
@@ -126,6 +129,19 @@ crawling:
     ...
 ```
 
+### `urlscan`
+
+```yaml
+urlscan:
+  api_key: ""              # leave empty to disable
+  visibility: private      # public | unlisted | private
+  tags:
+    - phishing
+    - phishnet
+```
+
+URLs where a kit is found are automatically submitted to urlscan.io when `api_key` is set.
+
 ### `feeds`
 
 ```yaml
@@ -162,6 +178,8 @@ feeds:
 
 ## Database schema
 
+Only URLs where the kit hunter finds and downloads a zip are written to the database.
+
 ### `urls`
 
 | Column | Type | Description |
@@ -173,7 +191,7 @@ feeds:
 
 ### `crawls`
 
-One row per crawl attempt. A URL may be crawled multiple times (e.g. with `--crawl-all`).
+One row per kit-hit crawl. A URL may appear multiple times with `--crawl-all`.
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -186,22 +204,49 @@ One row per crawl attempt. A URL may be crawled multiple times (e.g. with `--cra
 | `final_url` | TEXT | URL after all redirects |
 | `content_type` | TEXT | `Content-Type` header value |
 | `content_length` | INTEGER | Actual bytes downloaded |
-| `response_time_ms` | INTEGER | Time to first complete response (ms) |
+| `response_time_ms` | INTEGER | Total response time (ms) |
 | `retries_needed` | INTEGER | How many retries were required |
 | `server` | TEXT | `Server` header |
 | `x_powered_by` | TEXT | `X-Powered-By` header |
 | `response_headers` | TEXT | Full response headers as JSON |
 | `response_body` | TEXT | Response body (only when `capture_body: true`) |
+| `ip_address` | TEXT | Resolved IP address of the hostname |
+| `page_title` | TEXT | `<title>` tag extracted from response body |
+| `form_action` | TEXT | First `<form action="...">` value (credential exfil endpoint) |
 | `cert_subject` | TEXT | TLS cert subject as JSON |
 | `cert_issuer` | TEXT | TLS cert issuer as JSON |
 | `cert_valid_from` | TEXT | TLS cert notBefore |
 | `cert_valid_to` | TEXT | TLS cert notAfter |
 | `cert_san` | TEXT | Subject Alternative Names as JSON array |
 | `cert_fingerprint` | TEXT | SHA-256 fingerprint of the DER cert |
-| `kitphishr_ran` | INTEGER | 1 if kitphishr was invoked |
-| `kitphishr_status` | TEXT | `success`, `exit:N`, `timeout`, `binary_not_found` |
-| `kitphishr_zip` | TEXT | Path to the downloaded zip file |
-| `kitphishr_output` | TEXT | Combined stdout/stderr from kitphishr (truncated at 8 KB) |
+| `kitphishr_ran` | INTEGER | 1 if kit hunter ran |
+| `kitphishr_status` | TEXT | `success`, `no_kit_found`, or error string |
+| `kitphishr_zip` | TEXT | Path to the downloaded kit zip |
+| `kitphishr_output` | TEXT | Log of probed URLs and result |
+| `urlscan_uuid` | TEXT | urlscan.io submission UUID |
+| `urlscan_result_url` | TEXT | urlscan.io result page URL |
+
+---
+
+## Kit hunter
+
+The kit hunter is a pure Python implementation of the [kitphishr](https://github.com/cybercdh/kitphishr) algorithm. No external binary is required.
+
+For each phishing URL it walks path segments from deepest to root, generating candidate targets:
+
+```
+https://evil.com/bank/login.php  →
+  https://evil.com/bank/login.php       check as open dir
+  https://evil.com/bank/login.php.zip   direct zip probe
+  https://evil.com/bank                 check as open dir
+  https://evil.com/bank.zip             direct zip probe
+  https://evil.com                      check as open dir
+```
+
+For `.zip` candidates: checks `Content-Type: application/zip` and a valid `Content-Length`.
+For HTML responses: looks for `"Index of /"` in the `<title>` tag, then extracts and downloads any `.zip` hrefs found in the directory listing.
+
+Downloaded zips are saved to `kit_output_dir` with a filename derived from the full URL (all non-alphanumeric chars stripped), matching kitphishr's naming convention.
 
 ---
 
@@ -228,32 +273,44 @@ sqlite3 data/phishnet.db
 ```
 
 ```sql
--- All URLs found today
+-- All kit hits found today
 SELECT url, date_added FROM urls
 WHERE date_added >= date('now')
 ORDER BY date_added DESC;
 
--- Live sites (HTTP 200) from last crawl
-SELECT u.url, c.http_status, c.server, c.cert_subject
+-- Kit hits with page title and credential exfil endpoint
+SELECT u.url, c.page_title, c.form_action, c.ip_address
 FROM crawls c JOIN urls u ON u.id = c.url_id
-WHERE c.http_status = 200
 ORDER BY c.crawl_date DESC;
 
--- Sites still using a specific cert issuer (e.g. Let's Encrypt)
+-- Sites using Let's Encrypt (common on phishing infra)
 SELECT u.url, c.cert_issuer, c.cert_valid_to
 FROM crawls c JOIN urls u ON u.id = c.url_id
 WHERE c.cert_issuer LIKE '%Let%Encrypt%';
 
--- URLs where kitphishr successfully downloaded a kit
+-- All downloaded kit zips
 SELECT u.url, c.kitphishr_zip, c.crawl_date
 FROM crawls c JOIN urls u ON u.id = c.url_id
 WHERE c.kitphishr_status = 'success'
+ORDER BY c.crawl_date DESC;
+
+-- Kit hits submitted to urlscan.io
+SELECT u.url, c.urlscan_result_url, c.crawl_date
+FROM crawls c JOIN urls u ON u.id = c.url_id
+WHERE c.urlscan_uuid IS NOT NULL
 ORDER BY c.crawl_date DESC;
 
 -- Redirect chains
 SELECT u.url, c.final_url, c.redirect_chain
 FROM crawls c JOIN urls u ON u.id = c.url_id
 WHERE c.redirect_chain IS NOT NULL;
+
+-- Group kit hits by hosting IP
+SELECT c.ip_address, COUNT(*) AS kits
+FROM crawls c
+WHERE c.kitphishr_status = 'success'
+GROUP BY c.ip_address
+ORDER BY kits DESC;
 ```
 
 ---
@@ -271,5 +328,5 @@ phishnet/
     ├── phishing_urls.txt.bak
     ├── new_phishing_urls_YYYYMMDD_HHMMSS.txt
     ├── collector.log
-    └── kits/               # kitphishr zip downloads
+    └── kits/               # Downloaded kit zip files
 ```
