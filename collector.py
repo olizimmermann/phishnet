@@ -29,10 +29,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
+import colorama
+from colorama import Fore, Style
 import requests
 import schedule
 import urllib3
 import yaml
+
+colorama.init(autoreset=True)
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -781,18 +785,40 @@ def run_collection(cfg: dict, crawl_all: bool = False):
 
 # ─── Logging setup ────────────────────────────────────────────────────────────
 
+class _ColorFormatter(logging.Formatter):
+    """Colored console formatter — applied to StreamHandler only."""
+    _LEVEL = {
+        logging.DEBUG:    Style.DIM,
+        logging.WARNING:  Fore.YELLOW,
+        logging.ERROR:    Fore.RED + Style.BRIGHT,
+        logging.CRITICAL: Fore.RED + Style.BRIGHT,
+    }
+    _KIT = Fore.GREEN + Style.BRIGHT
+
+    def format(self, record: logging.LogRecord) -> str:
+        msg = super().format(record)
+        if "KIT FOUND" in msg or "[kit] zip" in msg:
+            return self._KIT + msg
+        color = self._LEVEL.get(record.levelno, "")
+        return color + msg if color else msg
+
+
 def setup_logging(level_name: str, log_file: str | None):
     level = getattr(logging, level_name.upper(), logging.INFO)
-    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    fmt      = "%(asctime)s [%(levelname)-8s] %(message)s"
+    datefmt  = "%Y-%m-%dT%H:%M:%S"
+
+    console = logging.StreamHandler(sys.stdout)
+    console.setFormatter(_ColorFormatter(fmt=fmt, datefmt=datefmt))
+
+    handlers: list[logging.Handler] = [console]
     if log_file:
         Path(log_file).parent.mkdir(parents=True, exist_ok=True)
-        handlers.append(logging.FileHandler(log_file))
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s [%(levelname)-8s] %(message)s",
-        datefmt="%Y-%m-%dT%H:%M:%S",
-        handlers=handlers,
-    )
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setFormatter(logging.Formatter(fmt=fmt, datefmt=datefmt))
+        handlers.append(file_handler)
+
+    logging.basicConfig(level=level, handlers=handlers)
 
 
 # ─── Entry point ─────────────────────────────────────────────────────────────
