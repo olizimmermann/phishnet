@@ -144,3 +144,15 @@ feeds:
   #   skip_rows: 1          # skip N rows before header/data detection
   #   comment_char: "#"
   #   user_agent: "custom-agent/1.0"
+
+
+# ─── urlscan.io ───────────────────────────────────────────────────────────────
+# URLs where kitphishr found a kit are automatically submitted for scanning.
+# Leave api_key empty (or remove this section) to disable.
+urlscan:
+  api_key: ""
+  # public | unlisted | private
+  visibility: private
+  tags:
+    - phishing
+    - phishnet

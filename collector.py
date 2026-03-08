@@ -15,9 +15,10 @@ import hashlib
 import io
 import json
 import logging
-import random
-import shutil
 import os
+import random
+import re
+import shutil
 import signal
 import socket
 import sqlite3
@@ -81,11 +82,20 @@ CREATE TABLE IF NOT EXISTS crawls (
     cert_san            TEXT,       -- JSON array of SANs
     cert_fingerprint    TEXT,       -- SHA-256 hex
 
+    -- Fingerprinting
+    ip_address          TEXT,       -- resolved IP of the hostname
+    page_title          TEXT,       -- <title> extracted from response body
+    form_action         TEXT,       -- first <form action="..."> value
+
     -- kitphishr
     kitphishr_ran        INTEGER DEFAULT 0,
     kitphishr_status     TEXT,
     kitphishr_zip        TEXT,
-    kitphishr_output     TEXT
+    kitphishr_output     TEXT,
+
+    -- urlscan.io
+    urlscan_uuid        TEXT,
+    urlscan_result_url  TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_crawls_url_id   ON crawls(url_id);
@@ -100,7 +110,18 @@ _CRAWL_COLS = [
     "server", "x_powered_by", "response_headers", "response_body",
     "cert_subject", "cert_issuer", "cert_valid_from", "cert_valid_to",
     "cert_san", "cert_fingerprint",
+    "ip_address", "page_title", "form_action",
     "kitphishr_ran", "kitphishr_status", "kitphishr_zip", "kitphishr_output",
+    "urlscan_uuid", "urlscan_result_url",
+]
+
+# Columns added after initial release — migrated automatically on open
+_MIGRATION_COLS = [
+    ("ip_address",         "TEXT"),
+    ("page_title",         "TEXT"),
+    ("form_action",        "TEXT"),
+    ("urlscan_uuid",       "TEXT"),
+    ("urlscan_result_url", "TEXT"),
 ]
 
 
@@ -110,6 +131,11 @@ def open_db(path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript(_SCHEMA)
+    for col, col_type in _MIGRATION_COLS:
+        try:
+            conn.execute(f"ALTER TABLE crawls ADD COLUMN {col} {col_type}")
+        except sqlite3.OperationalError:
+            pass  # column already exists
     conn.commit()
     return conn
 
@@ -379,10 +405,21 @@ def crawl_url(url: str, ua: str, crawl_cfg: dict) -> dict:
             if resp.history:
                 data["redirect_chain"] = json.dumps([r.url for r in resp.history])
 
+            # Fingerprinting — always extracted, regardless of capture_body
+            try:
+                body_text_fp = body_bytes[:body_max_bytes].decode("utf-8", errors="replace")
+                m = re.search(r"<title[^>]*>(.*?)</title>", body_text_fp, re.I | re.S)
+                if m:
+                    data["page_title"] = m.group(1).strip()[:512]
+                m = re.search(r"<form[^>]+action=[\"']([^\"']+)[\"']", body_text_fp, re.I)
+                if m:
+                    data["form_action"] = m.group(1).strip()[:512]
+            except Exception:
+                pass
+
             if capture_body:
                 try:
-                    body_text = body_bytes[:body_max_bytes].decode("utf-8", errors="replace")
-                    data["response_body"] = body_text
+                    data["response_body"] = body_bytes[:body_max_bytes].decode("utf-8", errors="replace")
                 except Exception:
                     pass
 
@@ -403,12 +440,17 @@ def crawl_url(url: str, ua: str, crawl_cfg: dict) -> dict:
 
     session.close()
 
-    # TLS cert probe (independent of HTTP crawl success)
+    # IP resolution + TLS cert probe (independent of HTTP crawl success)
     parsed = urlparse(url)
-    if parsed.scheme == "https":
-        host = parsed.hostname
-        port = parsed.port or 443
-        data.update(get_cert_info(host, port, timeout=tls_timeout))
+    host   = parsed.hostname
+    if host:
+        try:
+            data["ip_address"] = socket.gethostbyname(host)
+        except Exception:
+            pass
+        if parsed.scheme == "https":
+            port = parsed.port or 443
+            data.update(get_cert_info(host, port, timeout=tls_timeout))
 
     return data
 
@@ -460,14 +502,39 @@ def _ts() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
 
+# ─── urlscan.io ───────────────────────────────────────────────────────────────
+
+def submit_urlscan(url: str, api_key: str, visibility: str = "private", tags: list | None = None) -> dict:
+    payload: dict = {"url": url, "visibility": visibility}
+    if tags:
+        payload["tags"] = tags
+    try:
+        resp = requests.post(
+            "https://urlscan.io/api/v1/scan/",
+            headers={"API-Key": api_key, "Content-Type": "application/json"},
+            json=payload,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        log.info("  urlscan.io submitted %s → %s", url, data.get("result"))
+        return {
+            "urlscan_uuid":       data.get("uuid"),
+            "urlscan_result_url": data.get("result"),
+        }
+    except Exception as exc:
+        log.warning("  urlscan.io submission failed for %s: %s", url, exc)
+        return {}
+
+
 # ─── Per-URL worker (runs in thread pool) ────────────────────────────────────
 
 def _process_url(
-    url_id: int, url: str,
+    url: str,
     ua_cfg: dict, crawl_cfg: dict,
     do_crawl: bool, do_kitphishr: bool,
     kitphishr_bin: str, kitphishr_dir: str,
-) -> tuple[int, dict]:
+) -> tuple[str, dict]:
     ua = pick_ua(ua_cfg)
     log.info("  Crawling %s  (UA: %s)", url, ua[:60])
     crawl_data: dict = {"crawl_date": _utcnow(), "user_agent_used": ua, "final_url": url}
@@ -476,7 +543,7 @@ def _process_url(
     if do_kitphishr:
         log.info("  Running kitphishr on %s", url)
         crawl_data.update(run_kitphishr(url, kitphishr_bin, kitphishr_dir))
-    return url_id, crawl_data
+    return url, crawl_data
 
 
 # ─── Main collection run ──────────────────────────────────────────────────────
@@ -529,18 +596,15 @@ def run_collection(cfg: dict, crawl_all: bool = False):
         new_file.write_text("\n".join(sorted(new_urls)) + "\n")
         log.info("New URLs file → %s", new_file)
 
-    # ── 5. Update database ────────────────────────────────────────────────────
-    conn = open_db(db_path)
-    now = _utcnow()
+    # ── 5. Open DB — urls/crawls only written for kit hits ────────────────────
+    conn    = open_db(db_path)
+    now     = _utcnow()
+    urlscan_key        = cfg.get("urlscan", {}).get("api_key") or ""
+    urlscan_visibility = cfg.get("urlscan", {}).get("visibility", "private")
+    urlscan_tags       = cfg.get("urlscan", {}).get("tags") or ["phishing", "phishnet"]
 
-    urls_to_process: list[tuple[int, str]] = []
-    for url in all_urls:
-        url_id, is_new = db_insert_url(conn, url, now)
-        if is_new or crawl_all:
-            urls_to_process.append((url_id, url))
-
-    conn.commit()
-    log.info("DB: %d URLs to crawl/process this run", len(urls_to_process))
+    urls_to_process: list[str] = sorted(all_urls if crawl_all else new_urls)
+    log.info("URLs to process this run: %d", len(urls_to_process))
 
     # ── 6. Crawl + kitphishr (parallel) ──────────────────────────────────────
     workers = int(s.get("crawl_workers", 5))
@@ -551,20 +615,32 @@ def run_collection(cfg: dict, crawl_all: bool = False):
         future_to_url = {
             executor.submit(
                 _process_url,
-                url_id, url, ua_cfg, crawl_cfg,
+                url, ua_cfg, crawl_cfg,
                 do_crawl, do_kitphishr, kitphishr_bin, kitphishr_dir,
             ): url
-            for url_id, url in urls_to_process
+            for url in urls_to_process
         }
         done = 0
         for future in as_completed(future_to_url):
             url = future_to_url[future]
             done += 1
             try:
-                result_id, crawl_data = future.result()
-                db_insert_crawl(conn, result_id, crawl_data)
-                log.info("[%d/%d] saved %s  status=%s",
-                         done, total, url, crawl_data.get("http_status", "-"))
+                result_url, crawl_data = future.result()
+                kit_found = crawl_data.get("kitphishr_status") == "success"
+                if kit_found:
+                    if urlscan_key:
+                        crawl_data.update(submit_urlscan(
+                            result_url, urlscan_key, urlscan_visibility, urlscan_tags,
+                        ))
+                    url_id, _ = db_insert_url(conn, result_url, now)
+                    db_insert_crawl(conn, url_id, crawl_data)
+                    log.info("[%d/%d] KIT FOUND — saved %s  ip=%s  title=%s",
+                             done, total, result_url,
+                             crawl_data.get("ip_address", "-"),
+                             crawl_data.get("page_title", "-")[:60])
+                else:
+                    log.info("[%d/%d] no kit  %s  status=%s",
+                             done, total, result_url, crawl_data.get("http_status", "-"))
             except Exception as exc:
                 log.error("[%d/%d] failed %s — %s", done, total, url, exc)
 
