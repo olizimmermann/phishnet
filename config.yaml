@@ -142,7 +142,6 @@ feeds:
   #   comment_char: "#"
   #   user_agent: "custom-agent/1.0"
 
-
 # ─── urlscan.io ───────────────────────────────────────────────────────────────
 # URLs where kitphishr found a kit are automatically submitted for scanning.
 # Leave api_key empty (or remove this section) to disable.
