@@ -15,7 +15,6 @@ import hashlib
 import io
 import json
 import logging
-import os
 import random
 import re
 import shutil
@@ -23,7 +22,6 @@ import signal
 import socket
 import sqlite3
 import ssl
-import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -455,41 +453,149 @@ def crawl_url(url: str, ua: str, crawl_cfg: dict) -> dict:
     return data
 
 
-# ─── kitphishr ────────────────────────────────────────────────────────────────
+# ─── Kit hunting (Python replacement for kitphishr) ──────────────────────────
 
-def run_kitphishr(url: str, binary: str, output_dir: str) -> dict:
+def _kit_targets(url: str) -> list[str]:
+    """
+    Generate candidate URLs to probe for a phishing kit zip.
+    For each path depth, try a direct .zip download and a directory listing.
+    e.g. https://evil.com/bank/login.php →
+        https://evil.com/bank/login.php.zip
+        https://evil.com/bank/login.zip   (stem only)
+        https://evil.com/bank/            (open dir)
+        https://evil.com/bank.zip
+        https://evil.com/                 (open dir)
+    """
+    parsed = urlparse(url)
+    base   = f"{parsed.scheme}://{parsed.netloc}"
+    parts  = [p for p in parsed.path.split("/") if p]
+
+    seen: set[str] = set()
+    candidates: list[str] = []
+
+    def add(u: str) -> None:
+        if u not in seen:
+            seen.add(u)
+            candidates.append(u)
+
+    for depth in range(len(parts), 0, -1):
+        partial = "/" + "/".join(parts[:depth])
+        add(base + partial + ".zip")
+        # also try stem without extension
+        if "." in parts[depth - 1]:
+            stem = partial.rsplit(".", 1)[0]
+            add(base + stem + ".zip")
+        # directory listing one level up
+        parent = "/" + "/".join(parts[:depth - 1]) + "/"
+        add(base + parent)
+
+    add(base + "/")
+    return candidates
+
+
+def _kit_save(content: bytes, zip_url: str, output_dir: str) -> str:
+    """Save kit zip bytes to output_dir; return the saved path."""
+    name = Path(urlparse(zip_url).path).name or "kit.zip"
+    name = re.sub(r"[^\w.\-]", "_", name)
+    if not name.lower().endswith(".zip"):
+        name += ".zip"
+    name = name[:200]
+    dest = Path(output_dir) / name
+    counter = 1
+    while dest.exists():
+        dest = Path(output_dir) / f"{Path(name).stem}_{counter}.zip"
+        counter += 1
+    dest.write_bytes(content)
+    return str(dest)
+
+
+def find_phishing_kit(url: str, crawl_cfg: dict, output_dir: str) -> dict:
+    """
+    Hunt for a phishing kit zip by probing path variants and open directories.
+    Returns a dict matching the kitphishr_* columns.
+    """
     Path(output_dir).mkdir(parents=True, exist_ok=True)
-    try:
-        proc = subprocess.Popen(
-            [binary, "-d", "-v", "-o", output_dir, url],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            preexec_fn=os.setsid,   # new process group so we can kill the whole tree
-        )
-        try:
-            stdout, stderr = proc.communicate(timeout=120)
-        except subprocess.TimeoutExpired:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            stdout, stderr = proc.communicate()
-            return {"kitphishr_ran": 1, "kitphishr_status": "timeout",
-                    "kitphishr_output": "Process timed out after 120s"}
+    timeout  = int(crawl_cfg.get("timeout", 20))
+    max_size = 100 * 1024 * 1024  # 100 MB
 
-        output = (stdout + stderr).strip()
-        zips = sorted(Path(output_dir).glob("*.zip"), key=lambda p: p.stat().st_mtime)
-        zip_path = str(zips[-1]) if zips else None
-        status = "success" if proc.returncode == 0 else f"exit:{proc.returncode}"
-        return {
-            "kitphishr_ran": 1,
-            "kitphishr_status": status,
-            "kitphishr_zip": zip_path,
-            "kitphishr_output": output[:8192],
-        }
-    except FileNotFoundError:
-        log.warning("kitphishr not found at '%s' — skipping", binary)
-        return {"kitphishr_ran": 0, "kitphishr_status": "binary_not_found"}
-    except Exception as exc:
-        return {"kitphishr_ran": 1, "kitphishr_status": f"error: {exc}"}
+    session = requests.Session()
+    session.headers["User-Agent"] = "Mozilla/5.0"
+    session.verify = False
+
+    log_lines: list[str] = []
+
+    def _download_zip(zip_url: str) -> str | None:
+        """Fetch a URL, verify ZIP magic, save and return path (or None)."""
+        try:
+            r = session.get(zip_url, timeout=timeout, stream=True, allow_redirects=True)
+            if r.status_code != 200:
+                return None
+            data = b""
+            for chunk in r.iter_content(65536):
+                data += chunk
+                if len(data) >= max_size:
+                    break
+            if data[:2] == b"PK":   # ZIP magic bytes
+                return _kit_save(data, zip_url, output_dir)
+        except Exception as exc:
+            log_lines.append(f"download failed {zip_url}: {exc}")
+        return None
+
+    for candidate in _kit_targets(url):
+        try:
+            resp = session.get(candidate, timeout=timeout, stream=True, allow_redirects=True)
+            if resp.status_code != 200:
+                continue
+            ct = resp.headers.get("Content-Type", "")
+
+            if candidate.endswith(".zip") or "zip" in ct:
+                # Read and verify
+                data = b""
+                for chunk in resp.iter_content(65536):
+                    data += chunk
+                    if len(data) >= max_size:
+                        break
+                if data[:2] == b"PK":
+                    zip_path = _kit_save(data, candidate, output_dir)
+                    msg = f"kit found: {candidate}"
+                    log.info("  [kit] %s → %s", candidate, zip_path)
+                    log_lines.append(msg)
+                    session.close()
+                    return {
+                        "kitphishr_ran": 1, "kitphishr_status": "success",
+                        "kitphishr_zip": zip_path,
+                        "kitphishr_output": "\n".join(log_lines),
+                    }
+
+            elif "text/html" in ct:
+                body = resp.content[:65536].decode("utf-8", errors="replace")
+                if re.search(r"index of", body, re.I):
+                    cand_parsed = urlparse(candidate)
+                    for href in re.findall(r'href=["\']([^"\']+\.zip)["\']', body, re.I):
+                        zip_url = href if href.startswith("http") \
+                            else f"{cand_parsed.scheme}://{cand_parsed.netloc}" + \
+                                 ("" if href.startswith("/") else "/") + href
+                        zip_path = _download_zip(zip_url)
+                        if zip_path:
+                            msg = f"kit found in dir listing: {zip_url}"
+                            log.info("  [kit] %s → %s", zip_url, zip_path)
+                            log_lines.append(msg)
+                            session.close()
+                            return {
+                                "kitphishr_ran": 1, "kitphishr_status": "success",
+                                "kitphishr_zip": zip_path,
+                                "kitphishr_output": "\n".join(log_lines),
+                            }
+
+        except Exception as exc:
+            log_lines.append(f"probe {candidate}: {exc}")
+
+    session.close()
+    return {
+        "kitphishr_ran": 1, "kitphishr_status": "no_kit_found",
+        "kitphishr_zip": None,
+        "kitphishr_output": "\n".join(log_lines),
+    }
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -532,17 +638,14 @@ def submit_urlscan(url: str, api_key: str, visibility: str = "private", tags: li
 def _process_url(
     url: str,
     ua_cfg: dict, crawl_cfg: dict,
-    do_crawl: bool, do_kitphishr: bool,
-    kitphishr_bin: str, kitphishr_dir: str,
+    do_kit_hunt: bool, kit_dir: str,
 ) -> tuple[str, dict]:
     ua = pick_ua(ua_cfg)
     log.info("  Crawling %s  (UA: %s)", url, ua[:60])
     crawl_data: dict = {"crawl_date": _utcnow(), "user_agent_used": ua, "final_url": url}
-    if do_crawl:
-        crawl_data = crawl_url(url, ua, crawl_cfg)
-    if do_kitphishr:
-        log.info("  Running kitphishr on %s", url)
-        crawl_data.update(run_kitphishr(url, kitphishr_bin, kitphishr_dir))
+    crawl_data = crawl_url(url, ua, crawl_cfg)
+    if do_kit_hunt:
+        crawl_data.update(find_phishing_kit(url, crawl_cfg, kit_dir))
     return url, crawl_data
 
 
@@ -556,11 +659,9 @@ def run_collection(cfg: dict, crawl_all: bool = False):
     data_dir = Path(s.get("data_dir", "./data"))
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    db_path       = s.get("db_path", str(data_dir / "phishnet.db"))
-    do_crawl      = crawl_cfg.get("timeout") is not None or s.get("crawl_new_urls", True)
-    do_kitphishr   = bool(s.get("run_kitphishr", True))
-    kitphishr_bin  = s.get("kitphishr_bin", "kitphishr")
-    kitphishr_dir  = s.get("kitphishr_output_dir", str(data_dir / "kits"))
+    db_path      = s.get("db_path", str(data_dir / "phishnet.db"))
+    do_kit_hunt  = bool(s.get("run_kit_hunt", True))
+    kit_dir      = s.get("kit_output_dir", str(data_dir / "kits"))
 
     current_file = data_dir / "phishing_urls.txt"
     backup_file  = data_dir / "phishing_urls.txt.bak"
@@ -616,7 +717,7 @@ def run_collection(cfg: dict, crawl_all: bool = False):
             executor.submit(
                 _process_url,
                 url, ua_cfg, crawl_cfg,
-                do_crawl, do_kitphishr, kitphishr_bin, kitphishr_dir,
+                do_kit_hunt, kit_dir,
             ): url
             for url in urls_to_process
         }

@@ -8,14 +8,11 @@ settings:
   # SQLite DB path
   db_path: ./data/phishnet.db
 
-  # Run kitphishr on each new URL
-  run_kitphishr: true
+  # Hunt for phishing kit zips on each new URL
+  run_kit_hunt: true
 
-  # Path to kitphishr binary
-  kitphishr_bin: kitphishr
-
-  # Where kitphishr drops its zip files
-  kitphishr_output_dir: ./data/kits
+  # Where downloaded kit zips are saved
+  kit_output_dir: ./data/kits
 
   # Log level: DEBUG, INFO, WARNING, ERROR
   log_level: INFO
