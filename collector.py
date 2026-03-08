@@ -614,6 +614,7 @@ def submit_urlscan(url: str, api_key: str, visibility: str = "private", tags: li
     payload: dict = {"url": url, "visibility": visibility}
     if tags:
         payload["tags"] = tags
+    log.debug("  urlscan.io payload: %s", payload)
     try:
         resp = requests.post(
             "https://urlscan.io/api/v1/scan/",
@@ -623,11 +624,17 @@ def submit_urlscan(url: str, api_key: str, visibility: str = "private", tags: li
         )
         resp.raise_for_status()
         data = resp.json()
-        log.info("  urlscan.io submitted %s → %s", url, data.get("result"))
+        confirmed_visibility = data.get("visibility", "unknown")
+        log.info("  urlscan.io submitted %s → %s  (visibility: %s)",
+                 url, data.get("result"), confirmed_visibility)
         return {
             "urlscan_uuid":       data.get("uuid"),
             "urlscan_result_url": data.get("result"),
         }
+    except requests.exceptions.HTTPError as exc:
+        log.warning("  urlscan.io submission failed for %s: %s — %s",
+                    url, exc, exc.response.text[:300] if exc.response else "")
+        return {}
     except Exception as exc:
         log.warning("  urlscan.io submission failed for %s: %s", url, exc)
         return {}
