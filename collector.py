@@ -175,6 +175,13 @@ def _normalize(url: str) -> str:
     return url.strip().rstrip("/")
 
 
+def _ensure_scheme(url: str) -> str:
+    """Prepend http:// if the URL has no scheme."""
+    if not url.startswith(("http://", "https://")):
+        return "http://" + url
+    return url
+
+
 def fetch_feed(feed: dict, ua_cfg: dict, crawl_cfg: dict) -> set[str]:
     name = feed.get("name", feed["url"])
     feed_type = feed.get("type", "txt").lower()
@@ -203,6 +210,7 @@ def fetch_feed(feed: dict, ua_cfg: dict, crawl_cfg: dict) -> set[str]:
             line = raw.strip()
             if not line or line.startswith(comment_char):
                 continue
+            line = _ensure_scheme(line)
             if _is_valid_url(line):
                 urls.add(_normalize(line))
 
@@ -238,6 +246,7 @@ def fetch_feed(feed: dict, ua_cfg: dict, crawl_cfg: dict) -> set[str]:
                 except IndexError:
                     continue
 
+            candidate = _ensure_scheme(candidate)
             if _is_valid_url(candidate):
                 urls.add(_normalize(candidate))
 
@@ -340,15 +349,19 @@ def crawl_url(url: str, ua: str, crawl_cfg: dict) -> dict:
                 verify=verify_ssl,
                 stream=True,            # stream to enforce max_content_length
             )
-            elapsed_ms = int((time.monotonic() - t0) * 1000)
 
-            # Read body up to max_content_length
+            # Read body up to max_content_length, with an overall wall-clock
+            # timeout so slow/streaming servers can't hang the process.
             body_bytes = b""
             for chunk in resp.iter_content(chunk_size=65536):
                 body_bytes += chunk
                 if len(body_bytes) >= max_content:
                     body_bytes = body_bytes[:max_content]
                     break
+                if (time.monotonic() - t0) > timeout:
+                    break
+
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
 
             data["response_time_ms"] = elapsed_ms
             data["http_status"]      = resp.status_code
