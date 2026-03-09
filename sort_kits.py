@@ -30,7 +30,7 @@ def classify(filename: str) -> str | None:
     """Return destination sub-folder name or None to leave in place."""
     if _IP_RE.search(filename):
         return "potential_malware"
-    if "raw.githubusercontent.com" in filename:
+    if "raw.githubusercontent.com" in filename or "github.com" in filename:
         return "github_kits"
     return None
 
