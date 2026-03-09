@@ -50,6 +50,9 @@ python collector.py --daemon
 
 # Re-process all known URLs, not just new ones
 python collector.py --crawl-all
+
+# Test Telegram bot configuration and exit
+python collector.py --send-test-message
 ```
 
 ---
