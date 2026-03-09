@@ -754,7 +754,7 @@ def run_collection(cfg: dict, crawl_all: bool = False):
     conn    = open_db(db_path)
     now     = _utcnow()
     urlscan_key        = cfg.get("urlscan", {}).get("api_key") or ""
-    urlscan_visibility = cfg.get("urlscan", {}).get("visibility", "private")
+    urlscan_visibility = cfg.get("urlscan", {}).get("visibility", "public")
     urlscan_tags       = cfg.get("urlscan", {}).get("tags") or ["phishing", "phishnet"]
 
     urls_to_process: list[str] = sorted(all_urls if crawl_all else new_urls)

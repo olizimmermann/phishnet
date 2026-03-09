@@ -148,7 +148,7 @@ feeds:
 urlscan:
   api_key: ""
   # public | unlisted | private
-  visibility: private
+  visibility: public
   tags:
     - phishing
     - phishnet
