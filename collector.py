@@ -448,8 +448,8 @@ def crawl_url(url: str, ua: str, crawl_cfg: dict) -> dict:
     if host:
         try:
             data["ip_address"] = socket.gethostbyname(host)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("  DNS lookup failed for %s: %s", host, exc)
         if parsed.scheme == "https":
             port = parsed.port or 443
             data.update(get_cert_info(host, port, timeout=tls_timeout))
@@ -642,7 +642,7 @@ def _ts() -> str:
 
 # ─── urlscan.io ───────────────────────────────────────────────────────────────
 
-def submit_urlscan(url: str, api_key: str, visibility: str = "private", tags: list | None = None) -> dict:
+def submit_urlscan(url: str, api_key: str, visibility: str = "public", tags: list | None = None) -> dict:
     payload: dict = {"url": url, "visibility": visibility}
     if tags:
         payload["tags"] = tags
@@ -788,13 +788,13 @@ def run_collection(cfg: dict, crawl_all: bool = False):
                         ))
                     url_id, _ = db_insert_url(conn, result_url, now)
                     db_insert_crawl(conn, url_id, crawl_data)
-                    log.info("[%d/%d] KIT FOUND — saved %s  ip=%s  title=%s",
+                    log.info("[%d/%d] KIT FOUND — saved %s  http=%s  ip=%s  title=%s",
                              done, total, result_url,
+                             crawl_data.get("http_status", "-"),
                              crawl_data.get("ip_address", "-"),
-                             crawl_data.get("page_title", "-")[:60])
+                             (crawl_data.get("page_title") or "-")[:60])
                 else:
-                    log.info("[%d/%d] no kit  %s  status=%s",
-                             done, total, result_url, crawl_data.get("http_status", "-"))
+                    log.info("[%d/%d] no kit  %s", done, total, result_url)
             except Exception as exc:
                 log.error("[%d/%d] failed %s — %s", done, total, url, exc)
 
