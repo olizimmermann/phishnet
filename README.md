@@ -346,12 +346,37 @@ ORDER BY kits DESC;
 
 ---
 
+## Extracting kits
+
+`unpacker.sh` safely extracts kit zips, performing three checks before touching disk:
+
+1. **Magic bytes** — file must start with `PK` (0x504b)
+2. **Integrity** — `unzip -t` must pass
+3. **Zip slip** — entries with `../` or absolute paths are rejected
+
+Each zip is extracted into its own sub-directory named after the file.
+
+```bash
+# Preview (dry run not needed — checks happen before extraction)
+ls data/kits/ | ./unpacker.sh -o ./extracted -s data/kits/
+
+# Full paths (no -s needed)
+find data/kits/ -name "*.zip" | ./unpacker.sh -o ./extracted
+
+# After running sort_kits.py
+find data/kits/ -name "*.zip" | ./unpacker.sh -o ./extracted
+```
+
+---
+
 ## Project structure
 
 ```
 phishnet/
 ├── collector.py            # Main script
 ├── config.yaml             # Feed and crawl configuration
+├── sort_kits.py            # Triage kit zips into sub-folders
+├── unpacker.sh             # Safely extract kit zips
 ├── requirements.txt
 └── data/                   # Created automatically on first run
     ├── phishnet.db
@@ -360,4 +385,6 @@ phishnet/
     ├── new_phishing_urls_YYYYMMDD_HHMMSS.txt
     ├── collector.log
     └── kits/               # Downloaded kit zip files
+        ├── potential_malware/   # after sort_kits.py
+        └── github_kits/         # after sort_kits.py
 ```
