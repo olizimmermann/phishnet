@@ -152,3 +152,13 @@ urlscan:
   tags:
     - phishing
     - phishnet
+
+
+# ─── Telegram notifications ───────────────────────────────────────────────────
+# Sends a summary message after each run when at least one kit is found.
+# Leave bot_token or chat_id empty to disable.
+# Get a bot token from @BotFather, get your chat_id from @userinfobot.
+telegram:
+  bot_token: ""
+  chat_id: ""
+  notify_empty_runs: false   # set true to also notify when no kits are found

@@ -640,6 +640,41 @@ def _ts() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
 
+# ─── Telegram notifications ───────────────────────────────────────────────────
+
+def send_telegram(token: str, chat_id: str, text: str) -> None:
+    try:
+        resp = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        log.debug("Telegram notification sent")
+    except Exception as exc:
+        log.warning("Telegram notification failed: %s", exc)
+
+
+def _build_telegram_message(kit_hits: list[dict], total_processed: int) -> str:
+    lines = [
+        f"🎣 <b>phishnet run complete</b>",
+        f"🔍 Processed: {total_processed} URLs",
+        f"📦 Kits found: {len(kit_hits)}",
+    ]
+    if kit_hits:
+        lines.append("")
+        for hit in kit_hits:
+            lines.append(f"🌐 <code>{hit['url']}</code>")
+            if hit.get("ip_address"):
+                lines.append(f"   IP: {hit['ip_address']}")
+            if hit.get("page_title"):
+                lines.append(f"   Title: {hit['page_title'][:80]}")
+            if hit.get("urlscan_result_url"):
+                lines.append(f"   urlscan: {hit['urlscan_result_url']}")
+            lines.append("")
+    return "\n".join(lines).strip()
+
+
 # ─── urlscan.io ───────────────────────────────────────────────────────────────
 
 def submit_urlscan(url: str, api_key: str, visibility: str = "public", tags: list | None = None) -> dict:
@@ -756,6 +791,9 @@ def run_collection(cfg: dict, crawl_all: bool = False):
     urlscan_key        = cfg.get("urlscan", {}).get("api_key") or ""
     urlscan_visibility = cfg.get("urlscan", {}).get("visibility", "public")
     urlscan_tags       = cfg.get("urlscan", {}).get("tags") or ["phishing", "phishnet"]
+    tg_token   = cfg.get("telegram", {}).get("bot_token") or ""
+    tg_chat_id = cfg.get("telegram", {}).get("chat_id") or ""
+    kit_hits: list[dict] = []
 
     urls_to_process: list[str] = sorted(all_urls if crawl_all else new_urls)
     log.info("URLs to process this run: %d", len(urls_to_process))
@@ -788,6 +826,12 @@ def run_collection(cfg: dict, crawl_all: bool = False):
                         ))
                     url_id, _ = db_insert_url(conn, result_url, now)
                     db_insert_crawl(conn, url_id, crawl_data)
+                    kit_hits.append({
+                        "url":               result_url,
+                        "ip_address":        crawl_data.get("ip_address"),
+                        "page_title":        crawl_data.get("page_title"),
+                        "urlscan_result_url": crawl_data.get("urlscan_result_url"),
+                    })
                     log.info("[%d/%d] KIT FOUND — saved %s  http=%s  ip=%s  title=%s",
                              done, total, result_url,
                              crawl_data.get("http_status", "-"),
@@ -800,8 +844,13 @@ def run_collection(cfg: dict, crawl_all: bool = False):
 
     conn.close()
     log.info("=" * 60)
-    log.info("Run complete. DB: %s", db_path)
+    log.info("Run complete. Kits found: %d / %d processed. DB: %s",
+             len(kit_hits), total, db_path)
     log.info("=" * 60)
+
+    if tg_token and tg_chat_id and (kit_hits or cfg.get("telegram", {}).get("notify_empty_runs")):
+        msg = _build_telegram_message(kit_hits, total)
+        send_telegram(tg_token, tg_chat_id, msg)
 
 
 # ─── Logging setup ────────────────────────────────────────────────────────────
