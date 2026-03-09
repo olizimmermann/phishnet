@@ -895,9 +895,10 @@ def setup_logging(level_name: str, log_file: str | None):
 
 def main():
     parser = argparse.ArgumentParser(description="Phishing URL feed collector & crawler")
-    parser.add_argument("--config",    default="config.yaml", help="Config YAML (default: config.yaml)")
-    parser.add_argument("--daemon",    action="store_true",   help="Run continuously on internal schedule")
-    parser.add_argument("--crawl-all", action="store_true",   help="(Re)crawl all URLs, not just new ones")
+    parser.add_argument("--config",            default="config.yaml", help="Config YAML (default: config.yaml)")
+    parser.add_argument("--daemon",            action="store_true",   help="Run continuously on internal schedule")
+    parser.add_argument("--crawl-all",         action="store_true",   help="(Re)crawl all URLs, not just new ones")
+    parser.add_argument("--send-test-message", action="store_true",   help="Send a Telegram test message and exit")
     args = parser.parse_args()
 
     with open(args.config) as f:
@@ -905,6 +906,17 @@ def main():
 
     s = cfg.get("settings", {})
     setup_logging(s.get("log_level", "INFO"), s.get("log_file") or None)
+
+    if args.send_test_message:
+        tg = cfg.get("telegram", {})
+        token   = tg.get("bot_token") or ""
+        chat_id = tg.get("chat_id") or ""
+        if not token or not chat_id:
+            log.error("telegram.bot_token and telegram.chat_id must be set in config")
+            sys.exit(1)
+        send_telegram(token, chat_id, "✅ <b>phishnet</b> — Telegram test message. Configuration works!")
+        log.info("Test message sent")
+        sys.exit(0)
 
     if args.daemon:
         interval_hours = int(s.get("interval_hours", 6))
