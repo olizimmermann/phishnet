@@ -149,6 +149,7 @@ def db_insert_url(conn: sqlite3.Connection, url: str, now: str) -> tuple[int, bo
     row = cur.fetchone()
     if row:
         conn.execute("UPDATE urls SET date_last_seen = ? WHERE id = ?", (now, row["id"]))
+        conn.commit()
         return row["id"], False
     cur = conn.execute(
         "INSERT INTO urls (url, date_added, date_last_seen) VALUES (?, ?, ?)",
@@ -559,7 +560,7 @@ def find_phishing_kit(url: str, crawl_cfg: dict, output_dir: str) -> dict:
 
     def _save_zip(body: bytes, zip_url: str) -> str | None:
         try:
-            if len(body) > 0 and len(body) < max_size and body[:2] == b"PK":
+            if len(body) > 0 and len(body) <= max_size and body[:2] == b"PK":
                 return _kit_save(body, zip_url, output_dir)
         except Exception as exc:
             log_lines.append(f"save failed {zip_url}: {exc}")
@@ -582,7 +583,7 @@ def find_phishing_kit(url: str, crawl_cfg: dict, output_dir: str) -> dict:
                 content_length = int(cl)
             except (ValueError, TypeError):
                 content_length = -1
-            if "zip" in ct and 0 < content_length < max_size:
+            if "zip" in ct and 0 < content_length <= max_size:
                 zip_path = _save_zip(body, candidate)
                 if zip_path:
                     log.info("  [kit] zip from URL: %s → %s", candidate, zip_path)
@@ -722,7 +723,7 @@ def load_extra_urls(path: str) -> set[str]:
         return set()
 
     urls: set[str] = set()
-    for raw in p.read_text().splitlines():
+    for raw in p.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
@@ -798,12 +799,15 @@ def run_collection(cfg: dict, crawl_all: bool = False, extra_urls_file: str | No
     # ── 2. Load previously seen URLs — stream line-by-line (no giant string) ──
     previous_urls: set[str] = set()
     if current_file.exists():
-        with current_file.open() as fh:
+        with current_file.open(encoding="utf-8") as fh:
             previous_urls = {line.strip() for line in fh if line.strip()}
         log.info("Previously seen URLs: %d", len(previous_urls))
 
     new_urls = all_urls - previous_urls
     log.info("New URLs this run: %d", len(new_urls))
+
+    # Determine which URLs to process BEFORE all_urls is mutated below
+    urls_to_process: list[str] = sorted(all_urls if crawl_all else new_urls)
 
     # ── 3. Write union of all seen URLs (never shrinks on feed failure) ───────
     # Merge in-place so we avoid creating a third set, then free previous_urls.
@@ -811,7 +815,7 @@ def run_collection(cfg: dict, crawl_all: bool = False, extra_urls_file: str | No
     del previous_urls
     if current_file.exists():
         shutil.copy2(current_file, backup_file)
-    with current_file.open("w") as fh:        # write line-by-line — avoids one huge joined string in memory
+    with current_file.open("w", encoding="utf-8") as fh:  # line-by-line — avoids huge string in memory
         for url in sorted(all_urls):
             fh.write(url + "\n")
     log.info("Seen-URL list written (%d URLs) → %s", len(all_urls), current_file)
@@ -820,7 +824,7 @@ def run_collection(cfg: dict, crawl_all: bool = False, extra_urls_file: str | No
     # ── 4. Write timestamped new-URL file (kept forever) ─────────────────────
     if new_urls:
         new_file = data_dir / f"new_phishing_urls_{_ts()}.txt"
-        with new_file.open("w") as fh:
+        with new_file.open("w", encoding="utf-8") as fh:
             for url in sorted(new_urls):
                 fh.write(url + "\n")
         log.info("New URLs file → %s", new_file)
@@ -835,10 +839,7 @@ def run_collection(cfg: dict, crawl_all: bool = False, extra_urls_file: str | No
     tg_chat_id = cfg.get("telegram", {}).get("chat_id") or ""
     kit_hits: list[dict] = []
 
-    urls_to_process: list[str] = sorted(new_urls)
     del new_urls
-    if crawl_all:
-        log.warning("--crawl-all with large URL sets can use significant memory")
 
     total      = len(urls_to_process)
     workers    = int(s.get("crawl_workers", 5))
