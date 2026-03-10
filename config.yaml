@@ -23,6 +23,10 @@ settings:
   # Number of parallel workers for crawling + kitphishr
   crawl_workers: 5
 
+  # Number of URLs submitted to the thread pool at once.
+  # Lower values reduce memory usage at the cost of slightly less parallelism.
+  batch_size: 500
+
   # Optional path to a text file of extra URLs to ingest each run.
   # One URL per line, # comments supported. Can also be passed via --extra-urls.
   # extra_urls_file: ./data/extra_urls.txt

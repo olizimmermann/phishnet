@@ -24,6 +24,7 @@ import sqlite3
 import ssl
 import sys
 import time
+import itertools
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
@@ -794,27 +795,34 @@ def run_collection(cfg: dict, crawl_all: bool = False, extra_urls_file: str | No
         log.warning("No URLs collected from any source — skipping run to avoid corrupting seen-URL history")
         return
 
-    # ── 2. Load previously seen URLs (ever-growing accumulator) ──────────────
+    # ── 2. Load previously seen URLs — stream line-by-line (no giant string) ──
     previous_urls: set[str] = set()
     if current_file.exists():
-        previous_urls = {u for u in current_file.read_text().splitlines() if u.strip()}
+        with current_file.open() as fh:
+            previous_urls = {line.strip() for line in fh if line.strip()}
         log.info("Previously seen URLs: %d", len(previous_urls))
 
     new_urls = all_urls - previous_urls
     log.info("New URLs this run: %d", len(new_urls))
 
     # ── 3. Write union of all seen URLs (never shrinks on feed failure) ───────
-    # Using the union means URLs that disappear from a feed due to an outage
-    # won't be treated as "new" again when the feed recovers next run.
-    seen_urls = all_urls | previous_urls
-    shutil.copy2(current_file, backup_file) if current_file.exists() else None
-    current_file.write_text("\n".join(sorted(seen_urls)) + "\n")
-    log.info("Seen-URL list written (%d URLs) → %s", len(seen_urls), current_file)
+    # Merge in-place so we avoid creating a third set, then free previous_urls.
+    all_urls |= previous_urls
+    del previous_urls
+    if current_file.exists():
+        shutil.copy2(current_file, backup_file)
+    with current_file.open("w") as fh:        # write line-by-line — avoids one huge joined string in memory
+        for url in sorted(all_urls):
+            fh.write(url + "\n")
+    log.info("Seen-URL list written (%d URLs) → %s", len(all_urls), current_file)
+    del all_urls   # no longer needed; free memory before processing
 
     # ── 4. Write timestamped new-URL file (kept forever) ─────────────────────
     if new_urls:
         new_file = data_dir / f"new_phishing_urls_{_ts()}.txt"
-        new_file.write_text("\n".join(sorted(new_urls)) + "\n")
+        with new_file.open("w") as fh:
+            for url in sorted(new_urls):
+                fh.write(url + "\n")
         log.info("New URLs file → %s", new_file)
 
     # ── 5. Open DB — urls/crawls only written for kit hits ────────────────────
@@ -827,24 +835,35 @@ def run_collection(cfg: dict, crawl_all: bool = False, extra_urls_file: str | No
     tg_chat_id = cfg.get("telegram", {}).get("chat_id") or ""
     kit_hits: list[dict] = []
 
-    urls_to_process: list[str] = sorted(all_urls if crawl_all else new_urls)
-    log.info("URLs to process this run: %d", len(urls_to_process))
+    urls_to_process: list[str] = sorted(new_urls)
+    del new_urls
+    if crawl_all:
+        log.warning("--crawl-all with large URL sets can use significant memory")
 
-    # ── 6. Crawl + kitphishr (parallel) ──────────────────────────────────────
-    workers = int(s.get("crawl_workers", 5))
-    total   = len(urls_to_process)
-    log.info("Processing %d URLs with %d workers", total, workers)
+    total      = len(urls_to_process)
+    workers    = int(s.get("crawl_workers", 5))
+    batch_size = int(s.get("batch_size", 500))
+    log.info("URLs to process: %d  workers: %d  batch: %d",
+             total, workers, batch_size)
 
+    # ── 6. Crawl + kit hunt (parallel, batched) ───────────────────────────────
+    # Submit in fixed-size batches so at most `batch_size` Future objects exist
+    # in memory at once — critical for large URL sets (500k+).
+    def _batched(iterable: list, n: int):
+        for i in range(0, len(iterable), n):
+            yield iterable[i:i + n]
+
+    done = 0
     with ThreadPoolExecutor(max_workers=workers) as executor:
+      for batch in _batched(urls_to_process, batch_size):
         future_to_url = {
             executor.submit(
                 _process_url,
                 url, ua_cfg, crawl_cfg,
                 do_kit_hunt, kit_dir,
             ): url
-            for url in urls_to_process
+            for url in batch
         }
-        done = 0
         for future in as_completed(future_to_url):
             url = future_to_url[future]
             done += 1
