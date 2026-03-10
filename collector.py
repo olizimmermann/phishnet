@@ -707,6 +707,32 @@ def submit_urlscan(url: str, api_key: str, visibility: str = "public", tags: lis
         return {}
 
 
+# ─── Extra URL file ingestion ─────────────────────────────────────────────────
+
+def load_extra_urls(path: str) -> set[str]:
+    """
+    Load URLs from a plain text file (one per line, # comments supported).
+    Applies the same scheme-fixing and validation as feed ingestion.
+    Returns an empty set if the file doesn't exist.
+    """
+    p = Path(path)
+    if not p.exists():
+        log.debug("Extra URLs file not found, skipping: %s", path)
+        return set()
+
+    urls: set[str] = set()
+    for raw in p.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        line = _ensure_scheme(line)
+        if _is_valid_url(line):
+            urls.add(_normalize(line))
+
+    log.info("Extra URLs file: %d URLs loaded from %s", len(urls), path)
+    return urls
+
+
 # ─── Per-URL worker (runs in thread pool) ────────────────────────────────────
 
 def _process_url(
@@ -732,7 +758,7 @@ def _process_url(
 
 # ─── Main collection run ──────────────────────────────────────────────────────
 
-def run_collection(cfg: dict, crawl_all: bool = False):
+def run_collection(cfg: dict, crawl_all: bool = False, extra_urls_file: str | None = None):
     s          = cfg["settings"]
     ua_cfg     = cfg.get("user_agents", {})
     crawl_cfg  = cfg.get("crawling", {})
@@ -758,8 +784,14 @@ def run_collection(cfg: dict, crawl_all: bool = False):
 
     log.info("Total unique URLs collected from feeds: %d", len(all_urls))
 
+    # ── 1b. Ingest extra URLs file (CLI flag or config setting) ───────────────
+    extra_file = extra_urls_file or s.get("extra_urls_file") or ""
+    if extra_file:
+        all_urls.update(load_extra_urls(extra_file))
+        log.info("Total unique URLs after merging extra file: %d", len(all_urls))
+
     if not all_urls:
-        log.warning("No URLs returned from any feed — skipping run to avoid corrupting seen-URL history")
+        log.warning("No URLs collected from any source — skipping run to avoid corrupting seen-URL history")
         return
 
     # ── 2. Load previously seen URLs (ever-growing accumulator) ──────────────
@@ -898,6 +930,7 @@ def main():
     parser.add_argument("--config",            default="config.yaml", help="Config YAML (default: config.yaml)")
     parser.add_argument("--daemon",            action="store_true",   help="Run continuously on internal schedule")
     parser.add_argument("--crawl-all",         action="store_true",   help="(Re)crawl all URLs, not just new ones")
+    parser.add_argument("--extra-urls",        default=None,          help="Path to a text file of extra URLs to ingest this run")
     parser.add_argument("--send-test-message", action="store_true",   help="Send a Telegram test message and exit")
     args = parser.parse_args()
 
@@ -923,7 +956,7 @@ def main():
         log.info("Daemon mode — interval: %d hours", interval_hours)
 
         def _job():
-            run_collection(cfg, crawl_all=args.crawl_all)
+            run_collection(cfg, crawl_all=args.crawl_all, extra_urls_file=args.extra_urls)
 
         _job()  # run immediately at startup
         schedule.every(interval_hours).hours.do(_job)
@@ -939,7 +972,7 @@ def main():
             schedule.run_pending()
             time.sleep(30)
     else:
-        run_collection(cfg, crawl_all=args.crawl_all)
+        run_collection(cfg, crawl_all=args.crawl_all, extra_urls_file=args.extra_urls)
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ A Python tool that aggregates phishing URLs from multiple threat intel feeds, de
 
 ## Features
 
-- Ingests **TXT** and **CSV** feeds (configurable delimiter, column name or index)
+- Ingests **TXT** and **CSV** feeds (configurable delimiter, column name or index); supports an **extra URL file** for custom sources (e.g. output of a curl script)
 - **Deduplicates** across all feeds each run; scheme-less URLs (`evil.com/path`) are fixed automatically
 - **Seen-URL accumulator** — `phishing_urls.txt` only ever grows; feed outages never trigger re-crawls of already-processed URLs
 - Bails out safely if all feeds return zero URLs to prevent corrupting history
@@ -50,6 +50,9 @@ python collector.py --daemon
 
 # Re-process all known URLs, not just new ones
 python collector.py --crawl-all
+
+# Ingest an extra URL list for this run (merged with feed URLs)
+python collector.py --extra-urls /path/to/my_urls.txt
 
 # Test Telegram bot configuration and exit
 python collector.py --send-test-message
