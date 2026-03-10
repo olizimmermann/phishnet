@@ -677,6 +677,41 @@ def _build_telegram_message(kit_hits: list[dict], total_processed: int) -> str:
     return "\n".join(lines).strip()
 
 
+# ─── Slack notifications ──────────────────────────────────────────────────────
+
+def send_slack(webhook_url: str, text: str) -> None:
+    try:
+        resp = requests.post(
+            webhook_url,
+            json={"text": text},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        log.debug("Slack notification sent")
+    except Exception as exc:
+        log.warning("Slack notification failed: %s", exc)
+
+
+def _build_slack_message(kit_hits: list[dict], total_processed: int) -> str:
+    lines = [
+        f"🎣 *phishnet run complete*",
+        f"🔍 Processed: {total_processed} URLs",
+        f"📦 Kits found: {len(kit_hits)}",
+    ]
+    if kit_hits:
+        lines.append("")
+        for hit in kit_hits:
+            lines.append(f"🌐 `{hit['url']}`")
+            if hit.get("ip_address"):
+                lines.append(f"   IP: {hit['ip_address']}")
+            if hit.get("page_title"):
+                lines.append(f"   Title: {hit['page_title'][:80]}")
+            if hit.get("urlscan_result_url"):
+                lines.append(f"   urlscan: {hit['urlscan_result_url']}")
+            lines.append("")
+    return "\n".join(lines).strip()
+
+
 # ─── urlscan.io ───────────────────────────────────────────────────────────────
 
 def submit_urlscan(url: str, api_key: str, visibility: str = "public", tags: list | None = None) -> dict:
@@ -835,8 +870,9 @@ def run_collection(cfg: dict, crawl_all: bool = False, extra_urls_file: str | No
     urlscan_key        = cfg.get("urlscan", {}).get("api_key") or ""
     urlscan_visibility = cfg.get("urlscan", {}).get("visibility", "public")
     urlscan_tags       = cfg.get("urlscan", {}).get("tags") or ["phishing", "phishnet"]
-    tg_token   = cfg.get("telegram", {}).get("bot_token") or ""
-    tg_chat_id = cfg.get("telegram", {}).get("chat_id") or ""
+    tg_token      = cfg.get("telegram", {}).get("bot_token") or ""
+    tg_chat_id    = cfg.get("telegram", {}).get("chat_id") or ""
+    slack_webhook = cfg.get("slack", {}).get("webhook_url") or ""
     kit_hits: list[dict] = []
 
     del new_urls
@@ -900,9 +936,14 @@ def run_collection(cfg: dict, crawl_all: bool = False, extra_urls_file: str | No
              len(kit_hits), total, db_path)
     log.info("=" * 60)
 
-    if tg_token and tg_chat_id and (kit_hits or cfg.get("telegram", {}).get("notify_empty_runs")):
-        msg = _build_telegram_message(kit_hits, total)
-        send_telegram(tg_token, tg_chat_id, msg)
+    notify_empty = (cfg.get("telegram", {}).get("notify_empty_runs")
+                    or cfg.get("slack", {}).get("notify_empty_runs"))
+
+    if kit_hits or notify_empty:
+        if tg_token and tg_chat_id:
+            send_telegram(tg_token, tg_chat_id, _build_telegram_message(kit_hits, total))
+        if slack_webhook:
+            send_slack(slack_webhook, _build_slack_message(kit_hits, total))
 
 
 # ─── Logging setup ────────────────────────────────────────────────────────────
@@ -961,14 +1002,22 @@ def main():
     setup_logging(s.get("log_level", "INFO"), s.get("log_file") or None)
 
     if args.send_test_message:
+        sent = False
         tg = cfg.get("telegram", {})
-        token   = tg.get("bot_token") or ""
-        chat_id = tg.get("chat_id") or ""
-        if not token or not chat_id:
-            log.error("telegram.bot_token and telegram.chat_id must be set in config")
+        if tg.get("bot_token") and tg.get("chat_id"):
+            send_telegram(tg["bot_token"], tg["chat_id"],
+                          "✅ <b>phishnet</b> — Telegram test message. Configuration works!")
+            log.info("Telegram test message sent")
+            sent = True
+        sl = cfg.get("slack", {})
+        if sl.get("webhook_url"):
+            send_slack(sl["webhook_url"],
+                       "✅ *phishnet* — Slack test message. Configuration works!")
+            log.info("Slack test message sent")
+            sent = True
+        if not sent:
+            log.error("No notification service configured (telegram or slack)")
             sys.exit(1)
-        send_telegram(token, chat_id, "✅ <b>phishnet</b> — Telegram test message. Configuration works!")
-        log.info("Test message sent")
         sys.exit(0)
 
     if args.daemon:

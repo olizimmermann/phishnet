@@ -170,3 +170,12 @@ telegram:
   bot_token: ""
   chat_id: ""
   notify_empty_runs: false   # set true to also notify when no kits are found
+
+
+# ─── Slack notifications ───────────────────────────────────────────────────────
+# Sends a summary message via an incoming webhook after each run when kits are found.
+# Create a webhook at: https://api.slack.com/messaging/webhooks
+# Leave webhook_url empty to disable.
+slack:
+  webhook_url: ""
+  notify_empty_runs: false   # set true to also notify when no kits are found

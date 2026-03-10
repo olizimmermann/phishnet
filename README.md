@@ -17,7 +17,7 @@ A Python tool that aggregates phishing URLs from multiple threat intel feeds, de
 - **Parallel crawling** via `ThreadPoolExecutor`; worker count is configurable
 - **Kit hunter** — pure Python port of [kitphishr](https://github.com/cybercdh/kitphishr): walks path segments, probes `.zip` variants and Apache/Nginx open directory listings, downloads and saves confirmed kit zips
 - **urlscan.io** — automatically submits kit-hit URLs for scanning (configurable visibility and tags)
-- **Telegram notifications** — sends a per-run summary with kit URLs, IPs, titles and urlscan links when kits are found
+- **Telegram + Slack notifications** — sends a per-run summary with kit URLs, IPs, titles and urlscan links when kits are found; both can be active simultaneously
 - **User-Agent rotation** from a configurable pool; per-feed UA overrides supported
 - Browser-realistic headers (`Accept`, `Sec-Fetch-*`, etc.) to avoid trivial bot detection
 - Retry logic, proxy support, configurable timeouts, optional response body capture
@@ -158,6 +158,16 @@ telegram:
   chat_id: ""               # your chat/group ID — from @userinfobot
   notify_empty_runs: false  # set true to also notify when no kits are found
 ```
+
+### `slack`
+
+```yaml
+slack:
+  webhook_url: ""           # incoming webhook URL — leave empty to disable
+  notify_empty_runs: false  # set true to also notify when no kits are found
+```
+
+Create a webhook at https://api.slack.com/messaging/webhooks. Both Telegram and Slack can be active at the same time — if both are configured, both receive the message.
 
 A summary message is sent after each run when kits are found. Example:
 
