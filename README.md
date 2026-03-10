@@ -359,6 +359,42 @@ ORDER BY kits DESC;
 
 ---
 
+## Fetching from urlscan.io
+
+`get_urlscan_phish.py` queries the urlscan.io search API for phishing URLs and writes them to a file — ready to feed into `collector.py` via `--extra-urls`.
+
+The API key is read automatically from `config.yaml` (`urlscan.api_key`).
+
+```bash
+# Last 24h of phishing scans, exclude your own submissions
+python get_urlscan_phish.py -o urlscan_urls.txt --exclude-tag phishnet
+
+# Last 7 days, up to 5000 URLs
+python get_urlscan_phish.py -o urlscan_urls.txt --days 7 --max 5000
+
+# Multiple tag exclusions
+python get_urlscan_phish.py -o urlscan_urls.txt --exclude-tag phishnet --exclude-tag automated
+
+# Custom query
+python get_urlscan_phish.py -o urlscan_urls.txt --query "page.verdicts.overall.categories:phishing AND page.country:DE"
+
+# Pipe straight into collector
+python get_urlscan_phish.py -o /tmp/urlscan.txt && \
+    python collector.py --extra-urls /tmp/urlscan.txt
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `-o` / `--output` | stdout | Output file path |
+| `--exclude-tag TAG` | — | Exclude scans tagged with TAG (repeatable) |
+| `--query` | `page.verdicts.overall.categories:phishing` | Elasticsearch query |
+| `--days N` | 1 | Limit to last N days |
+| `--max N` | 1000 | Maximum URLs to fetch |
+| `--size N` | 100 | Results per API page |
+| `--config FILE` | auto-detect | Path to config.yaml |
+
+---
+
 ## Extracting kits
 
 `unpacker.sh` safely extracts kit zips, performing three checks before touching disk:
@@ -388,6 +424,7 @@ find data/kits/ -name "*.zip" | ./unpacker.sh -o ./extracted
 phishnet/
 ├── collector.py            # Main script
 ├── config.yaml             # Feed and crawl configuration
+├── get_urlscan_phish.py    # Fetch phishing URLs from urlscan.io
 ├── sort_kits.py            # Triage kit zips into sub-folders
 ├── unpacker.sh             # Safely extract kit zips
 ├── requirements.txt
