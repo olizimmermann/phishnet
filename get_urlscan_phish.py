@@ -9,7 +9,7 @@ Usage:
     python get_urlscan_phish.py -o urlscan_urls.txt --exclude-tag phishnet
     python get_urlscan_phish.py -o urlscan_urls.txt --days 7 --max 5000
     python get_urlscan_phish.py -o urlscan_urls.txt --exclude-tag phishnet --exclude-tag automated
-    python get_urlscan_phish.py --query "page.verdicts.overall.categories:phishing" -o out.txt
+    python get_urlscan_phish.py --query "verdicts.malicious:true" -o out.txt
     python get_urlscan_phish.py -o urlscan_urls.txt --config /path/to/config.yaml
 """
 
@@ -112,8 +112,9 @@ def fetch(
             break
 
         for r in results:
-            # page.url is the final URL after redirects; fall back to task.url
-            url = (r.get("page") or {}).get("url") or (r.get("task") or {}).get("url")
+            # task.url = originally submitted phishing URL (what we want)
+            # page.url = final URL after redirects (fallback)
+            url = (r.get("task") or {}).get("url") or (r.get("page") or {}).get("url")
             if url:
                 urls.append(url)
 
@@ -154,8 +155,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--query",
-        default="page.verdicts.overall.categories:phishing",
-        help="Base Elasticsearch query (default: phishing category)",
+        default="task.tags:phishing",
+        help='Base Elasticsearch query (default: task.tags:phishing). '
+             'Alternative: "verdicts.malicious:true" for all malicious scans.',
     )
     parser.add_argument(
         "--days", type=int, default=1,

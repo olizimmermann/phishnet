@@ -375,8 +375,8 @@ python get_urlscan_phish.py -o urlscan_urls.txt --days 7 --max 5000
 # Multiple tag exclusions
 python get_urlscan_phish.py -o urlscan_urls.txt --exclude-tag phishnet --exclude-tag automated
 
-# Custom query
-python get_urlscan_phish.py -o urlscan_urls.txt --query "page.verdicts.overall.categories:phishing AND page.country:DE"
+# Custom query — e.g. all malicious scans from Germany
+python get_urlscan_phish.py -o urlscan_urls.txt --query "verdicts.malicious:true AND page.country:DE"
 
 # Pipe straight into collector
 python get_urlscan_phish.py -o /tmp/urlscan.txt && \
@@ -387,7 +387,7 @@ python get_urlscan_phish.py -o /tmp/urlscan.txt && \
 |---|---|---|
 | `-o` / `--output` | stdout | Output file path |
 | `--exclude-tag TAG` | — | Exclude scans tagged with TAG (repeatable) |
-| `--query` | `page.verdicts.overall.categories:phishing` | Elasticsearch query |
+| `--query` | `task.tags:phishing` | Elasticsearch query |
 | `--days N` | 1 | Limit to last N days |
 | `--max N` | 1000 | Maximum URLs to fetch |
 | `--size N` | 100 | Results per API page |
