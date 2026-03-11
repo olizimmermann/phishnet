@@ -45,16 +45,27 @@ REPAIRABLE = [
     "cert_fingerprint",
 ]
 
+# Fields that only make sense for HTML pages — skip .zip/.rar/.exe URLs
+HTML_ONLY_FIELDS = {"page_title", "form_action"}
+
 
 def find_incomplete(conn: sqlite3.Connection, fields: list[str], limit: int) -> list[dict]:
     """Return crawl rows that have at least one NULL in the requested fields."""
     null_checks   = " OR ".join(f"c.{f} IS NULL" for f in fields)
     select_fields = ", ".join(f"c.{f}" for f in fields)
+
+    # If all requested fields are HTML-only, exclude binary file URLs entirely —
+    # they will never have titles or form actions regardless of retries.
+    zip_exclusion = ""
+    if all(f in HTML_ONLY_FIELDS for f in fields):
+        zip_exclusion = "AND u.url NOT LIKE '%.zip' AND u.url NOT LIKE '%.rar' AND u.url NOT LIKE '%.exe'"
+
     query = f"""
         SELECT c.id, u.url, {select_fields}
         FROM crawls c
         JOIN urls u ON u.id = c.url_id
-        WHERE {null_checks}
+        WHERE ({null_checks})
+        {zip_exclusion}
         ORDER BY c.crawl_date DESC
         LIMIT ?
     """

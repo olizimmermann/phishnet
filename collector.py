@@ -424,17 +424,23 @@ def crawl_url(url: str, ua: str, crawl_cfg: dict) -> dict:
             if resp.history:
                 data["redirect_chain"] = json.dumps([r.url for r in resp.history])
 
-            # Fingerprinting — always extracted, regardless of capture_body
-            try:
-                body_text_fp = body_bytes[:body_max_bytes].decode("utf-8", errors="replace")
-                m = re.search(r"<title[^>]*>(.*?)</title>", body_text_fp, re.I | re.S)
-                if m:
-                    data["page_title"] = m.group(1).strip()[:512]
-                m = re.search(r'<form\b[^>]*?\saction\s*=\s*["\']([^"\']*)["\']', body_text_fp, re.I)
-                if m and m.group(1).strip():
-                    data["form_action"] = m.group(1).strip()[:512]
-            except Exception:
-                pass
+            # Fingerprinting — skip for binary/non-HTML responses
+            _ct = (data.get("content_type") or "").lower()
+            _is_html = "html" in _ct or _ct == "" or "text" in _ct
+            _is_zip_url = url.lower().split("?")[0].endswith(
+                (".zip", ".rar", ".exe", ".gz", ".tar")
+            )
+            if _is_html and not _is_zip_url:
+                try:
+                    body_text_fp = body_bytes[:body_max_bytes].decode("utf-8", errors="replace")
+                    m = re.search(r"<title[^>]*>(.*?)</title>", body_text_fp, re.I | re.S)
+                    if m:
+                        data["page_title"] = m.group(1).strip()[:512]
+                    m = re.search(r'<form\b[^>]*?\saction\s*=\s*["\']([^"\']*)["\']', body_text_fp, re.I)
+                    if m and m.group(1).strip():
+                        data["form_action"] = m.group(1).strip()[:512]
+                except Exception:
+                    pass
 
             if capture_body:
                 try:
