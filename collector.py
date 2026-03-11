@@ -36,6 +36,8 @@ import requests
 import schedule
 import urllib3
 import yaml
+from cryptography import x509 as _x509
+from cryptography.hazmat.backends import default_backend as _crypto_backend
 
 colorama.init(autoreset=True)
 
@@ -305,16 +307,29 @@ def get_cert_info(hostname: str, port: int = 443, timeout: int = 10) -> dict:
             raw.settimeout(timeout)
             with ctx.wrap_socket(raw, server_hostname=hostname) as ssock:
                 ssock.settimeout(timeout)
-                cert = ssock.getpeercert()
                 der = ssock.getpeercert(binary_form=True)
-        if not cert:
+
+        if not der:
             return result
+
+        # getpeercert() returns {} with CERT_NONE — parse from DER bytes instead
         result["cert_fingerprint"] = hashlib.sha256(der).hexdigest()
-        result["cert_subject"] = json.dumps(dict(x[0] for x in cert.get("subject", [])))
-        result["cert_issuer"] = json.dumps(dict(x[0] for x in cert.get("issuer", [])))
-        result["cert_valid_from"] = cert.get("notBefore")
-        result["cert_valid_to"] = cert.get("notAfter")
-        result["cert_san"] = json.dumps([v for _, v in cert.get("subjectAltName", [])])
+        cert = _x509.load_der_x509_certificate(der, _crypto_backend())
+
+        def _name_dict(name) -> dict:
+            return {attr.oid.dotted_string: attr.value for attr in name}
+
+        result["cert_subject"]    = json.dumps(_name_dict(cert.subject))
+        result["cert_issuer"]     = json.dumps(_name_dict(cert.issuer))
+        result["cert_valid_from"] = cert.not_valid_before_utc.isoformat()
+        result["cert_valid_to"]   = cert.not_valid_after_utc.isoformat()
+
+        try:
+            san = cert.extensions.get_extension_for_class(_x509.SubjectAlternativeName)
+            result["cert_san"] = json.dumps(san.value.get_values_for_type(_x509.DNSName))
+        except _x509.ExtensionNotFound:
+            result["cert_san"] = json.dumps([])
+
     except Exception as exc:
         log.debug("cert_info failed for %s:%d — %s", hostname, port, exc)
     return result
