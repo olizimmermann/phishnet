@@ -642,6 +642,25 @@ def _ts() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
 
+# ─── URL defanging ────────────────────────────────────────────────────────────
+
+def _defang(url: str) -> str:
+    """
+    Defang a URL so it cannot be clicked or auto-linked in chat apps.
+    https://evil.com/path  →  hxxps://evil[.]com/path
+    """
+    url = url.replace("https://", "hxxps://").replace("http://", "hxxp://")
+    # Replace dots in the hostname only (up to the first slash after the scheme)
+    scheme_end = url.find("//")
+    if scheme_end == -1:
+        return url
+    path_start = url.find("/", scheme_end + 2)
+    host_part  = url[scheme_end + 2 : path_start] if path_start != -1 else url[scheme_end + 2:]
+    rest       = url[path_start:] if path_start != -1 else ""
+    host_part  = host_part.replace(".", "[.]")
+    return url[: scheme_end + 2] + host_part + rest
+
+
 # ─── Telegram notifications ───────────────────────────────────────────────────
 
 def send_telegram(token: str, chat_id: str, text: str) -> None:
@@ -666,7 +685,7 @@ def _build_telegram_message(kit_hits: list[dict], total_processed: int) -> str:
     if kit_hits:
         lines.append("")
         for hit in kit_hits:
-            lines.append(f"🌐 <code>{hit['url']}</code>")
+            lines.append(f"🌐 <code>{_defang(hit['url'])}</code>")
             if hit.get("ip_address"):
                 lines.append(f"   IP: {hit['ip_address']}")
             if hit.get("page_title"):
@@ -701,7 +720,7 @@ def _build_slack_message(kit_hits: list[dict], total_processed: int) -> str:
     if kit_hits:
         lines.append("")
         for hit in kit_hits:
-            lines.append(f"🌐 `{hit['url']}`")
+            lines.append(f"🌐 `{_defang(hit['url'])}`")
             if hit.get("ip_address"):
                 lines.append(f"   IP: {hit['ip_address']}")
             if hit.get("page_title"):
