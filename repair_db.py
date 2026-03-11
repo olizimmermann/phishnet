@@ -74,18 +74,12 @@ def find_incomplete(conn: sqlite3.Connection, fields: list[str], limit: int) -> 
 
 def find_missing_urlscan(conn: sqlite3.Connection, limit: int) -> list[dict]:
     """Return crawl rows that were never submitted to urlscan.io.
-    Excludes raw binary file URLs and GitHub raw content — urlscan only
-    scans web pages and returns 400 for direct file downloads."""
+    Excludes raw.githubusercontent.com — urlscan returns 400 for those."""
     query = """
         SELECT c.id, u.url
         FROM crawls c
         JOIN urls u ON u.id = c.url_id
         WHERE c.urlscan_uuid IS NULL
-          AND u.url NOT LIKE '%.zip'
-          AND u.url NOT LIKE '%.rar'
-          AND u.url NOT LIKE '%.exe'
-          AND u.url NOT LIKE '%.gz'
-          AND u.url NOT LIKE '%.tar'
           AND u.url NOT LIKE '%raw.githubusercontent.com%'
         ORDER BY c.crawl_date DESC
         LIMIT ?
