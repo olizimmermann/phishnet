@@ -152,16 +152,20 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("--config",         default="config.yaml")
-    parser.add_argument("--fields",         default=",".join(REPAIRABLE),
+    parser.add_argument("--config",               default="config.yaml")
+    parser.add_argument("--fields",               default=",".join(REPAIRABLE),
                         help=f"Comma-separated crawl fields to repair (default: all). Pass \"\" to skip crawl repair.")
-    parser.add_argument("--limit",          type=int, default=500,
+    parser.add_argument("--limit",                type=int, default=500,
                         help="Max rows per operation (default: 500)")
-    parser.add_argument("--workers",        type=int, default=5,
+    parser.add_argument("--workers",              type=int, default=5,
                         help="Parallel workers for crawl repair (default: 5)")
-    parser.add_argument("--submit-urlscan", action="store_true",
+    parser.add_argument("--submit-urlscan",       action="store_true",
                         help="Backfill urlscan.io submissions for rows missing urlscan_uuid")
-    parser.add_argument("--dry-run",        action="store_true",
+    parser.add_argument("--urlscan-delay",        type=float, default=2.0,
+                        help="Seconds to wait between urlscan.io submissions (default: 2.0)")
+    parser.add_argument("--do-only-urlscan-repair", action="store_true",
+                        help="Skip crawl field repair entirely — only run urlscan.io backfill")
+    parser.add_argument("--dry-run",              action="store_true",
                         help="Show what would be updated without writing")
     args = parser.parse_args()
 
@@ -179,7 +183,9 @@ def main() -> None:
     conn.row_factory = sqlite3.Row
 
     # ── 1. Crawl field repair ─────────────────────────────────────────────────
-    fields = [f.strip() for f in args.fields.split(",") if f.strip() in REPAIRABLE]
+    fields = [] if args.do_only_urlscan_repair else [
+        f.strip() for f in args.fields.split(",") if f.strip() in REPAIRABLE
+    ]
 
     if fields:
         rows  = find_incomplete(conn, fields, args.limit)
@@ -217,7 +223,7 @@ def main() -> None:
                      " (dry run)" if args.dry_run else "")
 
     # ── 2. urlscan.io backfill ────────────────────────────────────────────────
-    if args.submit_urlscan:
+    if args.submit_urlscan or args.do_only_urlscan_repair:
         us_cfg     = cfg.get("urlscan", {})
         api_key    = us_cfg.get("api_key") or ""
         visibility = us_cfg.get("visibility", "public")
@@ -247,9 +253,8 @@ def main() -> None:
                 else:
                     failed += 1
                     log.warning("[%d/%d] failed   %s", i, total, row["url"])
-                # urlscan rate limit: ~4 submissions/sec on free tier — be safe
                 if not args.dry_run:
-                    time.sleep(0.3)
+                    time.sleep(args.urlscan_delay)
 
             log.info("urlscan backfill done — %d submitted, %d failed%s",
                      submitted, failed, " (dry run)" if args.dry_run else "")
