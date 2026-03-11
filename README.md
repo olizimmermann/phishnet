@@ -424,6 +424,7 @@ find data/kits/ -name "*.zip" | ./unpacker.sh -o ./extracted
 phishnet/
 ├── collector.py            # Main script
 ├── config.yaml             # Feed and crawl configuration
+├── export_stats.py         # Generate stats.json + feed.txt for phishnet.cc dashboard
 ├── get_urlscan_phish.py    # Fetch phishing URLs from urlscan.io
 ├── sort_kits.py            # Triage kit zips into sub-folders
 ├── unpacker.sh             # Safely extract kit zips
