@@ -430,8 +430,8 @@ def crawl_url(url: str, ua: str, crawl_cfg: dict) -> dict:
                 m = re.search(r"<title[^>]*>(.*?)</title>", body_text_fp, re.I | re.S)
                 if m:
                     data["page_title"] = m.group(1).strip()[:512]
-                m = re.search(r"<form[^>]+action=[\"']([^\"']+)[\"']", body_text_fp, re.I)
-                if m:
+                m = re.search(r'<form\b[^>]*?\saction\s*=\s*["\']([^"\']*)["\']', body_text_fp, re.I)
+                if m and m.group(1).strip():
                     data["form_action"] = m.group(1).strip()[:512]
             except Exception:
                 pass
