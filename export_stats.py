@@ -124,7 +124,7 @@ def export(cfg: dict, output_dir: Path) -> None:
                 "http_status":       r["http_status"],
                 "form_action":       _defang(r["form_action"]) if r["form_action"] else None,
             }
-            for r in recent_rows
+            for r in recent_rows[:5]
         ],
         "kits_over_time": [
             {"date": r["day"], "count": r["count"]} for r in timeline_rows
