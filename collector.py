@@ -495,28 +495,25 @@ def crawl_url(url: str, ua: str, crawl_cfg: dict, ipinfo_token: str = "") -> dic
 
 def get_ip_geo(ip: str, token: str) -> dict:
     """
-    Look up geo location and ASN for an IP via ipinfo.io.
-    Returns a dict with geo_country, geo_city, asn, asn_org.
+    Look up geo location and ASN via the ipinfo.io Lite API.
+    Lite response fields: asn, as_name, as_domain, country_code, country,
+    continent_code, continent. No city on the free/lite tier.
     """
     result = {"geo_country": None, "geo_city": None, "asn": None, "asn_org": None}
     if not ip or not token:
         return result
     try:
         resp = requests.get(
-            f"https://ipinfo.io/{ip}",
+            f"https://api.ipinfo.io/lite/{ip}",
             params={"token": token},
             timeout=10,
         )
         resp.raise_for_status()
         data = resp.json()
-        result["geo_country"] = data.get("country")
-        result["geo_city"]    = data.get("city")
-        # org field is "AS15169 Google LLC" — split on first space
-        org = data.get("org", "")
-        if org:
-            parts = org.split(" ", 1)
-            result["asn"]     = parts[0]
-            result["asn_org"] = parts[1] if len(parts) > 1 else None
+        result["geo_country"] = data.get("country_code")
+        result["geo_city"]    = data.get("city")          # present on paid plans
+        result["asn"]         = data.get("asn")           # already "AS15169" format
+        result["asn_org"]     = data.get("as_name")
     except Exception as exc:
         log.debug("  ipinfo lookup failed for %s: %s", ip, exc)
     return result
