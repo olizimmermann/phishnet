@@ -91,6 +91,10 @@ CREATE TABLE IF NOT EXISTS crawls (
     ip_address          TEXT,       -- resolved IP of the hostname
     page_title          TEXT,       -- <title> extracted from response body
     form_action         TEXT,       -- first <form action="..."> value
+    geo_country         TEXT,       -- ISO country code from ipinfo.io
+    geo_city            TEXT,       -- city from ipinfo.io
+    asn                 TEXT,       -- ASN (e.g. AS15169)
+    asn_org             TEXT,       -- organisation name (e.g. Google LLC)
 
     -- kitphishr
     kitphishr_ran        INTEGER DEFAULT 0,
@@ -116,6 +120,7 @@ _CRAWL_COLS = [
     "cert_subject", "cert_issuer", "cert_valid_from", "cert_valid_to",
     "cert_san", "cert_fingerprint",
     "ip_address", "page_title", "form_action",
+    "geo_country", "geo_city", "asn", "asn_org",
     "kitphishr_ran", "kitphishr_status", "kitphishr_zip", "kitphishr_output",
     "urlscan_uuid", "urlscan_result_url",
 ]
@@ -127,6 +132,10 @@ _MIGRATION_COLS = [
     ("form_action",        "TEXT"),
     ("urlscan_uuid",       "TEXT"),
     ("urlscan_result_url", "TEXT"),
+    ("geo_country",        "TEXT"),
+    ("geo_city",           "TEXT"),
+    ("asn",                "TEXT"),
+    ("asn_org",            "TEXT"),
 ]
 
 
@@ -358,7 +367,7 @@ def _build_crawl_session(ua: str, crawl_cfg: dict) -> requests.Session:
     return session
 
 
-def crawl_url(url: str, ua: str, crawl_cfg: dict) -> dict:
+def crawl_url(url: str, ua: str, crawl_cfg: dict, ipinfo_token: str = "") -> dict:
     """
     Crawl a URL with the given User-Agent and crawl configuration.
     Retries on connection/timeout errors. Returns a dict matching _CRAWL_COLS.
@@ -473,11 +482,44 @@ def crawl_url(url: str, ua: str, crawl_cfg: dict) -> dict:
             data["ip_address"] = socket.gethostbyname(host)
         except Exception as exc:
             log.debug("  DNS lookup failed for %s: %s", host, exc)
+        if data.get("ip_address") and ipinfo_token:
+            data.update(get_ip_geo(data["ip_address"], ipinfo_token))
         if parsed.scheme == "https":
             port = parsed.port or 443
             data.update(get_cert_info(host, port, timeout=tls_timeout))
 
     return data
+
+
+# ─── ipinfo.io geo / ASN lookup ───────────────────────────────────────────────
+
+def get_ip_geo(ip: str, token: str) -> dict:
+    """
+    Look up geo location and ASN for an IP via ipinfo.io.
+    Returns a dict with geo_country, geo_city, asn, asn_org.
+    """
+    result = {"geo_country": None, "geo_city": None, "asn": None, "asn_org": None}
+    if not ip or not token:
+        return result
+    try:
+        resp = requests.get(
+            f"https://ipinfo.io/{ip}",
+            params={"token": token},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        result["geo_country"] = data.get("country")
+        result["geo_city"]    = data.get("city")
+        # org field is "AS15169 Google LLC" — split on first space
+        org = data.get("org", "")
+        if org:
+            parts = org.split(" ", 1)
+            result["asn"]     = parts[0]
+            result["asn_org"] = parts[1] if len(parts) > 1 else None
+    except Exception as exc:
+        log.debug("  ipinfo lookup failed for %s: %s", ip, exc)
+    return result
 
 
 # ─── Kit hunting (Python replacement for kitphishr) ──────────────────────────
@@ -816,6 +858,7 @@ def _process_url(
     url: str,
     ua_cfg: dict, crawl_cfg: dict,
     do_kit_hunt: bool, kit_dir: str,
+    ipinfo_token: str = "",
 ) -> tuple[str, dict]:
     # Kit hunt first — crawl metadata only collected when a kit is found
     # so we don't waste network requests on the majority of URLs
@@ -827,7 +870,7 @@ def _process_url(
 
     ua = pick_ua(ua_cfg)
     log.info("  Crawling %s  (UA: %s)", url, ua[:60])
-    crawl_data = crawl_url(url, ua, crawl_cfg)
+    crawl_data = crawl_url(url, ua, crawl_cfg, ipinfo_token)
     if do_kit_hunt:
         crawl_data.update(kit_data)
     return url, crawl_data
@@ -913,6 +956,7 @@ def run_collection(cfg: dict, crawl_all: bool = False, extra_urls_file: str | No
     tg_token      = cfg.get("telegram", {}).get("bot_token") or ""
     tg_chat_id    = cfg.get("telegram", {}).get("chat_id") or ""
     slack_webhook = cfg.get("slack", {}).get("webhook_url") or ""
+    ipinfo_token  = s.get("ipinfo_token") or ""
     kit_hits: list[dict] = []
 
     del new_urls
@@ -937,7 +981,7 @@ def run_collection(cfg: dict, crawl_all: bool = False, extra_urls_file: str | No
             executor.submit(
                 _process_url,
                 url, ua_cfg, crawl_cfg,
-                do_kit_hunt, kit_dir,
+                do_kit_hunt, kit_dir, ipinfo_token,
             ): url
             for url in batch
         }

@@ -25,7 +25,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import yaml
 
 # Import helpers from collector — no code duplication
-from collector import crawl_url, pick_ua, setup_logging, submit_urlscan, log
+from collector import crawl_url, pick_ua, setup_logging, submit_urlscan, log, get_ip_geo
 
 # ── Fields that can be repaired by re-crawling ────────────────────────────────
 REPAIRABLE = [
@@ -37,6 +37,10 @@ REPAIRABLE = [
     "ip_address",
     "page_title",
     "form_action",
+    "geo_country",
+    "geo_city",
+    "asn",
+    "asn_org",
     "cert_subject",
     "cert_issuer",
     "cert_valid_from",
@@ -44,6 +48,9 @@ REPAIRABLE = [
     "cert_san",
     "cert_fingerprint",
 ]
+
+# Geo fields need the ipinfo token — handled separately in repair_row
+GEO_FIELDS = {"geo_country", "geo_city", "asn", "asn_org"}
 
 # Fields that only make sense for HTML pages — skip .zip/.rar/.exe URLs
 HTML_ONLY_FIELDS = {"page_title", "form_action"}
@@ -92,13 +99,22 @@ def repair_row(
     fields: list[str],
     ua_cfg: dict,
     crawl_cfg: dict,
+    ipinfo_token: str,
     dry_run: bool,
     conn: sqlite3.Connection,
 ) -> tuple[int, int]:
     """Re-crawl and update only NULL fields that come back with a real value."""
-    url     = row["url"]
-    ua      = pick_ua(ua_cfg)
-    new_data = crawl_url(url, ua, crawl_cfg)
+    url      = row["url"]
+    ua       = pick_ua(ua_cfg)
+    new_data = crawl_url(url, ua, crawl_cfg, ipinfo_token)
+
+    # Geo fields: if ip_address is already known but geo is missing,
+    # call ipinfo directly without a full re-crawl
+    geo_fields_needed = [f for f in fields if f in GEO_FIELDS and row.get(f) is None]
+    if geo_fields_needed and ipinfo_token:
+        ip = row.get("ip_address") or new_data.get("ip_address")
+        if ip:
+            new_data.update(get_ip_geo(ip, ipinfo_token))
 
     updated = skipped = 0
     for field in fields:
@@ -174,10 +190,11 @@ def main() -> None:
     with open(args.config, encoding="utf-8") as fh:
         cfg = yaml.safe_load(fh)
 
-    s         = cfg.get("settings", {})
-    ua_cfg    = cfg.get("user_agents", {})
-    crawl_cfg = cfg.get("crawling", {})
-    db_path   = s.get("db_path", "./data/phishnet.db")
+    s            = cfg.get("settings", {})
+    ua_cfg       = cfg.get("user_agents", {})
+    crawl_cfg    = cfg.get("crawling", {})
+    db_path      = s.get("db_path", "./data/phishnet.db")
+    ipinfo_token = s.get("ipinfo_token") or ""
 
     setup_logging(s.get("log_level", "INFO"), None)
 
@@ -204,7 +221,7 @@ def main() -> None:
             with ThreadPoolExecutor(max_workers=args.workers) as executor:
                 future_map = {
                     executor.submit(
-                        repair_row, row, fields, ua_cfg, crawl_cfg, args.dry_run, conn
+                        repair_row, row, fields, ua_cfg, crawl_cfg, ipinfo_token, args.dry_run, conn
                     ): row
                     for row in rows
                 }

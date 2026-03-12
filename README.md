@@ -269,6 +269,10 @@ One row per kit-hit crawl. A URL may appear multiple times with `--crawl-all`.
 | `ip_address` | TEXT | Resolved IP address of the hostname |
 | `page_title` | TEXT | `<title>` tag extracted from response body |
 | `form_action` | TEXT | First `<form action="...">` value (credential exfil endpoint) |
+| `geo_country` | TEXT | ISO country code from ipinfo.io (e.g. `DE`) |
+| `geo_city` | TEXT | City from ipinfo.io |
+| `asn` | TEXT | ASN identifier (e.g. `AS15169`) |
+| `asn_org` | TEXT | Organisation name (e.g. `Google LLC`) |
 | `cert_subject` | TEXT | TLS cert subject as JSON |
 | `cert_issuer` | TEXT | TLS cert issuer as JSON |
 | `cert_valid_from` | TEXT | TLS cert notBefore |
