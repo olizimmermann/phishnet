@@ -4,6 +4,18 @@ A Python tool that aggregates phishing URLs from multiple threat intel feeds, de
 
 ---
 
+## Disclaimer
+
+This tool is developed for **authorized threat intelligence research and analysis only**. It is intended to support the detection, documentation, and study of phishing infrastructure in academic and professional security contexts.
+
+- Do not use this tool against systems or infrastructure you do not have explicit permission to analyse.
+- Downloaded phishing kit archives may contain malicious code. Treat all content in `data/kits/` as untrusted and handle it in an isolated environment.
+- The tool makes outbound HTTP requests to URLs sourced from public threat intelligence feeds. Ensure your use complies with the terms of those feeds and the laws applicable in your jurisdiction.
+
+If you have questions about responsible use or research collaboration, contact [research@oz-security.io](mailto:research@oz-security.io).
+
+---
+
 ## Features
 
 - Ingests **TXT** and **CSV** feeds (configurable delimiter, column name or index); supports an **extra URL file** for custom sources (e.g. output of a curl script)
