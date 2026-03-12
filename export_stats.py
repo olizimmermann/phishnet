@@ -45,9 +45,12 @@ def export(cfg: dict, output_dir: Path) -> None:
     cut_30d   = (now - timedelta(days=30)).isoformat(timespec="seconds")
 
     # ── Aggregate stats ───────────────────────────────────────────────────────
-    total_kits = conn.execute("SELECT COUNT(*) FROM urls").fetchone()[0]
-    total_ips  = conn.execute(
+    total_kits      = conn.execute("SELECT COUNT(*) FROM urls").fetchone()[0]
+    total_ips       = conn.execute(
         "SELECT COUNT(DISTINCT ip_address) FROM crawls WHERE ip_address IS NOT NULL"
+    ).fetchone()[0]
+    total_countries = conn.execute(
+        "SELECT COUNT(DISTINCT geo_country) FROM crawls WHERE geo_country IS NOT NULL"
     ).fetchone()[0]
     kits_24h = conn.execute(
         "SELECT COUNT(*) FROM crawls WHERE crawl_date >= ?", (cut_24h,)
@@ -59,7 +62,8 @@ def export(cfg: dict, output_dir: Path) -> None:
     # ── Recent kit hits ───────────────────────────────────────────────────────
     recent_rows = conn.execute("""
         SELECT u.url, c.ip_address, c.page_title, c.crawl_date,
-               c.cert_issuer, c.urlscan_result_url, c.http_status, c.form_action
+               c.cert_issuer, c.urlscan_result_url, c.http_status, c.form_action,
+               c.geo_country, c.asn, c.asn_org
         FROM crawls c JOIN urls u ON u.id = c.url_id
         ORDER BY c.crawl_date DESC
         LIMIT 25
@@ -94,6 +98,26 @@ def export(cfg: dict, output_dir: Path) -> None:
         LIMIT 15
     """).fetchall()
 
+    # ── Top countries ─────────────────────────────────────────────────────────
+    country_rows = conn.execute("""
+        SELECT geo_country, COUNT(*) as count
+        FROM crawls
+        WHERE geo_country IS NOT NULL
+        GROUP BY geo_country
+        ORDER BY count DESC
+        LIMIT 15
+    """).fetchall()
+
+    # ── Top ASNs ──────────────────────────────────────────────────────────────
+    asn_rows = conn.execute("""
+        SELECT asn, asn_org, COUNT(*) as count
+        FROM crawls
+        WHERE asn IS NOT NULL
+        GROUP BY asn
+        ORDER BY count DESC
+        LIMIT 10
+    """).fetchall()
+
     conn.close()
 
     # ── Total URLs seen (from accumulator file) ───────────────────────────────
@@ -107,11 +131,12 @@ def export(cfg: dict, output_dir: Path) -> None:
     stats = {
         "generated_at": now.isoformat(timespec="seconds"),
         "stats": {
-            "total_urls_seen":  total_urls_seen,
-            "total_kit_hits":   total_kits,
-            "total_unique_ips": total_ips,
-            "kits_last_24h":    kits_24h,
-            "kits_last_7d":     kits_7d,
+            "total_urls_seen":    total_urls_seen,
+            "total_kit_hits":     total_kits,
+            "total_unique_ips":   total_ips,
+            "total_countries":    total_countries,
+            "kits_last_24h":      kits_24h,
+            "kits_last_7d":       kits_7d,
         },
         "recent_kits": [
             {
@@ -123,6 +148,9 @@ def export(cfg: dict, output_dir: Path) -> None:
                 "urlscan_result_url": r["urlscan_result_url"],
                 "http_status":       r["http_status"],
                 "form_action":       _defang(r["form_action"]) if r["form_action"] else None,
+                "geo_country":       r["geo_country"],
+                "asn":               r["asn"],
+                "asn_org":           r["asn_org"],
             }
             for r in recent_rows[:5]
         ],
@@ -134,6 +162,12 @@ def export(cfg: dict, output_dir: Path) -> None:
         ],
         "top_titles": [
             {"title": r["page_title"], "count": r["count"]} for r in brand_rows
+        ],
+        "top_countries": [
+            {"country": r["geo_country"], "count": r["count"]} for r in country_rows
+        ],
+        "top_asns": [
+            {"asn": r["asn"], "asn_org": r["asn_org"], "count": r["count"]} for r in asn_rows
         ],
     }
 
