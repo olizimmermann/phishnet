@@ -206,6 +206,11 @@ def main() -> None:
 
     setup_logging(s.get("log_level", "INFO"), None)
 
+    if not ipinfo_token:
+        log.warning("settings.ipinfo_token is not set — geo/ASN fields cannot be repaired")
+    else:
+        log.info("ipinfo_token loaded (%s...)", ipinfo_token[:6])
+
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
 

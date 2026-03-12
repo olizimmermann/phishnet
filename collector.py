@@ -515,7 +515,7 @@ def get_ip_geo(ip: str, token: str) -> dict:
         result["asn"]         = data.get("asn")           # already "AS15169" format
         result["asn_org"]     = data.get("as_name")
     except Exception as exc:
-        log.debug("  ipinfo lookup failed for %s: %s", ip, exc)
+        log.warning("  ipinfo lookup failed for %s: %s", ip, exc)
     return result
 
 
