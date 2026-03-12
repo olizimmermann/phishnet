@@ -67,8 +67,10 @@ def find_incomplete(conn: sqlite3.Connection, fields: list[str], limit: int) -> 
     if all(f in HTML_ONLY_FIELDS for f in fields):
         zip_exclusion = "AND u.url NOT LIKE '%.zip' AND u.url NOT LIKE '%.rar' AND u.url NOT LIKE '%.exe'"
 
+    # Always include ip_address so geo shortcuts can use it without re-crawling
+    extra = "" if "ip_address" in fields else ", c.ip_address"
     query = f"""
-        SELECT c.id, u.url, {select_fields}
+        SELECT c.id, u.url, {select_fields}{extra}
         FROM crawls c
         JOIN urls u ON u.id = c.url_id
         WHERE ({null_checks})
@@ -105,16 +107,22 @@ def repair_row(
 ) -> tuple[int, int]:
     """Re-crawl and update only NULL fields that come back with a real value."""
     url      = row["url"]
-    ua       = pick_ua(ua_cfg)
-    new_data = crawl_url(url, ua, crawl_cfg, ipinfo_token)
+    new_data: dict = {}
 
-    # Geo fields: if ip_address is already known but geo is missing,
-    # call ipinfo directly without a full re-crawl
     geo_fields_needed = [f for f in fields if f in GEO_FIELDS and row.get(f) is None]
-    if geo_fields_needed and ipinfo_token:
-        ip = row.get("ip_address") or new_data.get("ip_address")
-        if ip:
-            new_data.update(get_ip_geo(ip, ipinfo_token))
+    non_geo_needed    = [f for f in fields if f not in GEO_FIELDS and row.get(f) is None]
+
+    # If we only need geo fields and ip_address is already known, skip the
+    # HTTP crawl entirely — just call ipinfo directly.
+    if geo_fields_needed and not non_geo_needed and row.get("ip_address") and ipinfo_token:
+        new_data.update(get_ip_geo(row["ip_address"], ipinfo_token))
+    else:
+        # Full crawl needed (non-geo fields missing, or ip_address itself is NULL)
+        ua       = pick_ua(ua_cfg)
+        new_data = crawl_url(url, ua, crawl_cfg, ipinfo_token)
+        # If crawl gave us an IP and geo is still needed, supplement with ipinfo
+        if geo_fields_needed and ipinfo_token and new_data.get("ip_address"):
+            new_data.update(get_ip_geo(new_data["ip_address"], ipinfo_token))
 
     updated = skipped = 0
     for field in fields:
