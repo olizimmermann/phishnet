@@ -521,16 +521,18 @@ def get_ip_geo(ip: str, token: str) -> dict:
 
 # ─── Kit hunting (Python replacement for kitphishr) ──────────────────────────
 
-# Magic byte signatures for supported archive formats (None = no reliable magic)
+# Magic byte signatures for supported archive formats (None = no reliable magic).
+# Ordered longest-first so compound extensions (.tar.gz) match before their
+# suffixes (.gz) in any linear scan of this dict.
 _ARCHIVE_MAGIC: dict[str, bytes | None] = {
+    ".tar.gz":  b"\x1f\x8b",
+    ".tar.bz2": b"BZh",
+    ".tgz":     b"\x1f\x8b",
     ".zip":     b"PK",
     ".rar":     b"Rar!",
     ".7z":      b"7z\xbc\xaf",
     ".gz":      b"\x1f\x8b",
-    ".tgz":     b"\x1f\x8b",
-    ".tar.gz":  b"\x1f\x8b",
     ".bz2":     b"BZh",
-    ".tar.bz2": b"BZh",
     ".tar":     None,
 }
 
@@ -678,7 +680,11 @@ def find_phishing_kit(
         ct = r.headers.get("Content-Type", "")
         cl = r.headers.get("Content-Length", "")
 
-        matched_ext = next((e for e in extensions if candidate.lower().endswith(e)), None)
+        matched_ext = next(
+            (e for e in sorted(extensions, key=len, reverse=True)
+             if candidate.lower().endswith(e)),
+            None,
+        )
         if matched_ext is not None:
             # Direct archive URL — validate by Content-Length + magic bytes
             try:
