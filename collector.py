@@ -521,17 +521,35 @@ def get_ip_geo(ip: str, token: str) -> dict:
 
 # ─── Kit hunting (Python replacement for kitphishr) ──────────────────────────
 
-def _kit_targets(url: str) -> list[str]:
+# Magic byte signatures for supported archive formats (None = no reliable magic)
+_ARCHIVE_MAGIC: dict[str, bytes | None] = {
+    ".zip":     b"PK",
+    ".rar":     b"Rar!",
+    ".7z":      b"7z\xbc\xaf",
+    ".gz":      b"\x1f\x8b",
+    ".tgz":     b"\x1f\x8b",
+    ".tar.gz":  b"\x1f\x8b",
+    ".bz2":     b"BZh",
+    ".tar.bz2": b"BZh",
+    ".tar":     None,
+}
+
+_DEFAULT_KIT_EXTENSIONS = [".zip", ".rar", ".tar.gz", ".7z"]
+
+
+def _kit_targets(url: str, extensions: list[str]) -> list[str]:
     """
-    Mirror kitphishr's GenerateTargets: walk path segments from deepest to root,
-    emitting the raw path URL and a .zip variant at each level.
+    Walk path segments from deepest to root, emitting the raw path URL and
+    one archive variant per configured extension at each level.
 
     https://evil.com/bank/login.php →
         https://evil.com/bank/login.php        (check as open dir)
-        https://evil.com/bank/login.php.zip    (direct zip)
+        https://evil.com/bank/login.php.zip    (direct archive)
+        https://evil.com/bank/login.php.rar    (direct archive)
+        ...
         https://evil.com/bank                  (check as open dir)
-        https://evil.com/bank.zip              (direct zip)
-        https://evil.com                       (check as open dir)
+        https://evil.com/bank.zip              (direct archive)
+        ...
         [https://evil.com.zip skipped — fewer than 3 slashes]
     """
     parsed = urlparse(url)
@@ -551,11 +569,12 @@ def _kit_targets(url: str) -> list[str]:
         tmp_url = base + "/".join(segment)
         add(tmp_url)
 
-        zip_url = tmp_url + ".zip"
-        # kitphishr skips http://example.com/.zip and http://example.com.zip
-        if zip_url.endswith("/.zip") or zip_url.count("/") < 3:
-            continue
-        add(zip_url)
+        for ext in extensions:
+            archive_url = tmp_url + ext
+            # skip http://example.com/.ext and http://example.com.ext (< 3 slashes)
+            if archive_url.endswith("/." + ext.lstrip(".")) or archive_url.count("/") < 3:
+                continue
+            add(archive_url)
 
     return candidates
 
@@ -577,12 +596,20 @@ def _kit_save(content: bytes, zip_url: str, output_dir: str) -> str:
     return str(dest)
 
 
-def find_phishing_kit(url: str, crawl_cfg: dict, output_dir: str) -> dict:
+def find_phishing_kit(
+    url: str,
+    crawl_cfg: dict,
+    output_dir: str,
+    extensions: list[str] | None = None,
+) -> dict:
     """
-    Hunt for a phishing kit zip — Python port of kitphishr.
-    Probes each target URL: .zip URLs are checked by Content-Type + Content-Length;
+    Hunt for a phishing kit archive — Python port of kitphishr.
+    Probes each target URL: archive URLs are validated by magic bytes;
     HTML responses are checked for Apache/Nginx open-directory titles.
+    Supported extensions are configurable (default: .zip .rar .tar.gz .7z).
     """
+    if extensions is None:
+        extensions = _DEFAULT_KIT_EXTENSIONS
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     timeout  = int(crawl_cfg.get("timeout", 20))
     max_size = 100 * 1024 * 1024  # 100 MB — same as kitphishr
@@ -618,15 +645,30 @@ def find_phishing_kit(url: str, crawl_cfg: dict, output_dir: str) -> dict:
             log_lines.append(f"probe {target}: {exc}")
         return None
 
-    def _save_zip(body: bytes, zip_url: str) -> str | None:
+    def _save_archive(body: bytes, archive_url: str) -> str | None:
+        """Save body if it passes magic-byte validation for the given URL's extension."""
         try:
-            if len(body) > 0 and len(body) <= max_size and body[:2] == b"PK":
-                return _kit_save(body, zip_url, output_dir)
+            if len(body) == 0 or len(body) > max_size:
+                return None
+            url_lower = archive_url.lower()
+            magic = next(
+                (m for ext, m in _ARCHIVE_MAGIC.items() if url_lower.endswith(ext)),
+                b""  # unknown extension: skip magic check
+            )
+            if magic is not None and not body.startswith(magic):
+                return None
+            return _kit_save(body, archive_url, output_dir)
         except Exception as exc:
-            log_lines.append(f"save failed {zip_url}: {exc}")
+            log_lines.append(f"save failed {archive_url}: {exc}")
         return None
 
-    for candidate in _kit_targets(url):
+    # Pre-compile open-dir href pattern for all configured extensions
+    _ext_pattern = "|".join(re.escape(e) for e in extensions)
+    _href_re = re.compile(
+        rf'href=["\']([^"\'?#]+(?:{_ext_pattern}))["\']', re.I
+    )
+
+    for candidate in _kit_targets(url, extensions):
         log.debug("  [kit] probing %s", candidate)
         result = _fetch(candidate)
         if result is None:
@@ -636,51 +678,50 @@ def find_phishing_kit(url: str, crawl_cfg: dict, output_dir: str) -> dict:
         ct = r.headers.get("Content-Type", "")
         cl = r.headers.get("Content-Length", "")
 
-        if candidate.endswith(".zip"):
-            # Mirror kitphishr: Content-Type must contain "zip",
-            # Content-Length must be present, positive, and under 100 MB
+        matched_ext = next((e for e in extensions if candidate.lower().endswith(e)), None)
+        if matched_ext is not None:
+            # Direct archive URL — validate by Content-Length + magic bytes
             try:
                 content_length = int(cl)
             except (ValueError, TypeError):
                 content_length = -1
-            if "zip" in ct and 0 < content_length <= max_size:
-                zip_path = _save_zip(body, candidate)
-                if zip_path:
-                    log.info("  [kit] zip from URL: %s → %s", candidate, zip_path)
-                    log_lines.append(f"zip from URL: {candidate}")
+            if 0 < content_length <= max_size:
+                archive_path = _save_archive(body, candidate)
+                if archive_path:
+                    log.info("  [kit] archive from URL: %s → %s", candidate, archive_path)
+                    log_lines.append(f"archive from URL: {candidate}")
                     session.close()
                     return {
                         "kitphishr_ran": 1, "kitphishr_status": "success",
-                        "kitphishr_zip": zip_path,
+                        "kitphishr_zip": archive_path,
                         "kitphishr_output": "\n".join(log_lines),
                     }
 
         elif "text/html" in ct:
-            # Mirror kitphishr's ZipFromDir: look for "Index of /" in <title>
+            # Open-directory listing: look for "Index of /" in <title>
             body_text = body.decode("utf-8", errors="replace")
             m = re.search(r"<title[^>]*>(.*?)</title>", body_text, re.I | re.S)
             title = m.group(1) if m else ""
             if "Index of /" in title:
-                for href in re.findall(r'href=["\']([^"\'?#]+\.zip)["\']', body_text, re.I):
-                    # mirror kitphishr URL construction
+                for href in _href_re.findall(body_text):
                     if href.startswith("http"):
-                        zip_url = href
+                        archive_url = href
                     elif href.startswith("/"):
-                        zip_url = f"{urlparse(candidate).scheme}://{urlparse(candidate).netloc}{href}"
+                        archive_url = f"{urlparse(candidate).scheme}://{urlparse(candidate).netloc}{href}"
                     else:
-                        zip_url = candidate.rstrip("/") + "/" + href
-                    result2 = _fetch(zip_url)
+                        archive_url = candidate.rstrip("/") + "/" + href
+                    result2 = _fetch(archive_url)
                     if result2 is None:
                         continue
                     _, body2 = result2
-                    zip_path = _save_zip(body2, zip_url)
-                    if zip_path:
-                        log.info("  [kit] zip from open dir: %s → %s", zip_url, zip_path)
-                        log_lines.append(f"zip from open dir: {zip_url}")
+                    archive_path = _save_archive(body2, archive_url)
+                    if archive_path:
+                        log.info("  [kit] archive from open dir: %s → %s", archive_url, archive_path)
+                        log_lines.append(f"archive from open dir: {archive_url}")
                         session.close()
                         return {
                             "kitphishr_ran": 1, "kitphishr_status": "success",
-                            "kitphishr_zip": zip_path,
+                            "kitphishr_zip": archive_path,
                             "kitphishr_output": "\n".join(log_lines),
                         }
 
@@ -856,12 +897,13 @@ def _process_url(
     ua_cfg: dict, crawl_cfg: dict,
     do_kit_hunt: bool, kit_dir: str,
     ipinfo_token: str = "",
+    kit_extensions: list[str] | None = None,
 ) -> tuple[str, dict]:
     # Kit hunt first — crawl metadata only collected when a kit is found
     # so we don't waste network requests on the majority of URLs
     if do_kit_hunt:
         log.info("  Hunting kit for %s", url)
-        kit_data = find_phishing_kit(url, crawl_cfg, kit_dir)
+        kit_data = find_phishing_kit(url, crawl_cfg, kit_dir, kit_extensions)
         if kit_data.get("kitphishr_status") != "success":
             return url, kit_data
 
@@ -884,8 +926,9 @@ def run_collection(cfg: dict, crawl_all: bool = False, extra_urls_file: str | No
     data_dir.mkdir(parents=True, exist_ok=True)
 
     db_path      = s.get("db_path", str(data_dir / "phishnet.db"))
-    do_kit_hunt  = bool(s.get("run_kit_hunt", True))
-    kit_dir      = s.get("kit_output_dir", str(data_dir / "kits"))
+    do_kit_hunt    = bool(s.get("run_kit_hunt", True))
+    kit_dir        = s.get("kit_output_dir", str(data_dir / "kits"))
+    kit_extensions = s.get("kit_extensions", _DEFAULT_KIT_EXTENSIONS)
 
     current_file = data_dir / "phishing_urls.txt"
     backup_file  = data_dir / "phishing_urls.txt.bak"
@@ -978,7 +1021,7 @@ def run_collection(cfg: dict, crawl_all: bool = False, extra_urls_file: str | No
             executor.submit(
                 _process_url,
                 url, ua_cfg, crawl_cfg,
-                do_kit_hunt, kit_dir, ipinfo_token,
+                do_kit_hunt, kit_dir, ipinfo_token, kit_extensions,
             ): url
             for url in batch
         }

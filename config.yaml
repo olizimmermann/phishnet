@@ -8,11 +8,20 @@ settings:
   # SQLite DB path
   db_path: ./data/phishnet.db
 
-  # Hunt for phishing kit zips on each new URL
+  # Hunt for phishing kit archives on each new URL
   run_kit_hunt: true
 
-  # Where downloaded kit zips are saved
+  # Where downloaded kit archives are saved
   kit_output_dir: ./data/kits
+
+  # Archive extensions to probe when hunting for kits.
+  # Magic-byte validation is applied automatically for known formats.
+  # Supported: .zip .rar .tar.gz .tgz .7z .gz .bz2 .tar.bz2 .tar
+  kit_extensions:
+    - .zip
+    - .rar
+    - .tar.gz
+    - .7z
 
   # Log level: DEBUG, INFO, WARNING, ERROR
   log_level: INFO

@@ -1,6 +1,6 @@
 # phishnet
 
-A Python tool that aggregates phishing URLs from multiple threat intel feeds, deduplicates them, and hunts for phishing kit zips. Only URLs where a kit is found are crawled for HTTP/TLS metadata and fingerprinting data, persisted to SQLite, and optionally submitted to urlscan.io.
+A Python tool that aggregates phishing URLs from multiple threat intel feeds, deduplicates them, and hunts for phishing kit archives. Only URLs where a kit is found are crawled for HTTP/TLS metadata and fingerprinting data, persisted to SQLite, and optionally submitted to urlscan.io.
 
 ---
 
@@ -27,7 +27,7 @@ If you have questions about responsible use or research collaboration, contact [
 - **Crawls** kit-hit URLs: HTTP status, redirect chain, response headers, server info, TLS cert details
 - **Fingerprinting** fields extracted from kit-hit responses: resolved IP, page title, form action URL
 - **Parallel crawling** via `ThreadPoolExecutor`; worker count is configurable
-- **Kit hunter** — pure Python port of [kitphishr](https://github.com/cybercdh/kitphishr): walks path segments, probes `.zip` variants and Apache/Nginx open directory listings, downloads and saves confirmed kit zips
+- **Kit hunter** — pure Python port of [kitphishr](https://github.com/cybercdh/kitphishr): walks path segments, probes archive variants and Apache/Nginx open directory listings, downloads and saves confirmed kit archives; supported formats (`.zip`, `.rar`, `.tar.gz`, `.7z`, and more) are configurable
 - **urlscan.io** — automatically submits kit-hit URLs for scanning (configurable visibility and tags)
 - **Telegram + Slack notifications** — sends a per-run summary with kit URLs, IPs, titles and urlscan links when kits are found; both can be active simultaneously
 - **User-Agent rotation** from a configurable pool; per-feed UA overrides supported
@@ -97,7 +97,12 @@ settings:
   data_dir: ./data             # root for all output files
   db_path: ./data/phishnet.db
   run_kit_hunt: true           # set false to skip kit hunting
-  kit_output_dir: ./data/kits  # where downloaded zips are saved
+  kit_output_dir: ./data/kits  # where downloaded archives are saved
+  kit_extensions:              # archive formats to probe (magic-byte validated)
+    - .zip
+    - .rar
+    - .tar.gz
+    - .7z
   crawl_workers: 5             # parallel worker threads
   log_level: INFO              # DEBUG | INFO | WARNING | ERROR
   log_file: ./data/collector.log  # omit or set null for stdout only
@@ -292,21 +297,26 @@ One row per kit-hit crawl. A URL may appear multiple times with `--crawl-all`.
 
 The kit hunter is a pure Python implementation of the [kitphishr](https://github.com/cybercdh/kitphishr) algorithm. No external binary is required.
 
-For each phishing URL it walks path segments from deepest to root, generating candidate targets:
+For each phishing URL it walks path segments from deepest to root, generating candidate targets for each configured archive extension:
 
 ```
 https://evil.com/bank/login.php  →
-  https://evil.com/bank/login.php       check as open dir
-  https://evil.com/bank/login.php.zip   direct zip probe
-  https://evil.com/bank                 check as open dir
-  https://evil.com/bank.zip             direct zip probe
-  https://evil.com                      check as open dir
+  https://evil.com/bank/login.php        check as open dir
+  https://evil.com/bank/login.php.zip    direct archive probe
+  https://evil.com/bank/login.php.rar    direct archive probe
+  ...
+  https://evil.com/bank                  check as open dir
+  https://evil.com/bank.zip              direct archive probe
+  ...
+  https://evil.com                       check as open dir
 ```
 
-For `.zip` candidates: checks `Content-Type: application/zip` and a valid `Content-Length`.
-For HTML responses: looks for `"Index of /"` in the `<title>` tag, then extracts and downloads any `.zip` hrefs found in the directory listing.
+For direct archive candidates: validates a positive `Content-Length` and checks magic bytes (`PK` for zip, `Rar!` for rar, `\x1f\x8b` for gzip, etc.).
+For HTML responses: looks for `"Index of /"` in the `<title>` tag, then extracts and downloads any matching archive hrefs found in the directory listing.
 
-Downloaded zips are saved to `kit_output_dir` with a filename derived from the full URL (all non-alphanumeric chars stripped), matching kitphishr's naming convention.
+Archive formats probed are configured via `kit_extensions` in `config.yaml` (default: `.zip`, `.rar`, `.tar.gz`, `.7z`). Additional formats supported: `.tgz`, `.gz`, `.bz2`, `.tar.bz2`, `.tar`.
+
+Downloaded archives are saved to `kit_output_dir` with a filename derived from the full URL (all non-alphanumeric chars stripped), matching kitphishr's naming convention.
 
 ---
 
@@ -413,23 +423,25 @@ python get_urlscan_phish.py -o /tmp/urlscan.txt && \
 
 ## Extracting kits
 
-`unpacker.sh` safely extracts kit zips, performing three checks before touching disk:
+`unpacker.sh` safely extracts kit archives, performing three checks before touching disk:
 
-1. **Magic bytes** — file must start with `PK` (0x504b)
-2. **Integrity** — `unzip -t` must pass
-3. **Zip slip** — entries with `../` or absolute paths are rejected
+1. **Magic bytes** — format-specific signature check (`PK` for zip, `Rar!` for rar, `\x1f\x8b` for gzip, etc.)
+2. **Integrity** — tool integrity test (`unzip -t`, `unrar t`, `tar -tf`, `7z t`, …)
+3. **Path traversal** — entries with `../` or absolute paths are rejected (zip/tar via Python `zipfile`/`tarfile`; rar via `unrar vb`; 7z via `7z l`)
 
-Each zip is extracted into its own sub-directory named after the file.
+Supported formats: `.zip` `.rar` `.7z` `.tar.gz` `.tgz` `.tar.bz2` `.tbz2` `.tar` `.gz` `.bz2`
+
+Each archive is extracted into its own sub-directory named after the file. Required tools (`unrar`, `p7zip`) must be installed separately; missing tools cause affected files to be skipped with a message.
 
 ```bash
-# Preview (dry run not needed — checks happen before extraction)
+# All formats — pass any file list
 ls data/kits/ | ./unpacker.sh -o ./extracted -s data/kits/
 
 # Full paths (no -s needed)
-find data/kits/ -name "*.zip" | ./unpacker.sh -o ./extracted
+find data/kits/ | ./unpacker.sh -o ./extracted
 
 # After running sort_kits.py
-find data/kits/ -name "*.zip" | ./unpacker.sh -o ./extracted
+find data/kits/ | ./unpacker.sh -o ./extracted
 ```
 
 ---
