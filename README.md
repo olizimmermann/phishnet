@@ -78,7 +78,7 @@ python collector.py --send-test-message
 |------|-------------|
 | `data/phishing_urls.txt` | Cumulative seen-URL list — **grows every run, never shrinks** |
 | `data/phishing_urls.txt.bak` | Previous run's list |
-| `data/new_phishing_urls_YYYYMMDD_HHMMSS.txt` | URLs new to this run — **kept forever** |
+| `data/new_phishing_urls_YYYYMMDD_HHMMSS.txt` | URLs new to this run — **kept forever**; used by `export_stats.py` to build a recency-ordered feed |
 | `data/phishnet.db` | SQLite database — **only kit-hit URLs** |
 | `data/kits/` | Downloaded phishing kit zip files |
 | `data/collector.log` | Log file (if configured) |
@@ -418,6 +418,20 @@ python get_urlscan_phish.py -o /tmp/urlscan.txt && \
 | `--max N` | 1000 | Maximum URLs to fetch |
 | `--size N` | 100 | Results per API page |
 | `--config FILE` | auto-detect | Path to config.yaml |
+
+---
+
+## Exporting stats
+
+`export_stats.py` generates `stats.json` and `feed.txt` for the phishnet.cc dashboard.
+
+`feed.txt` contains the **1000 most recently first-seen URLs** (not defanged — suitable for tool ingestion). It is built by reading the per-run `new_phishing_urls_*.txt` files newest-first, so the feed reflects actual recency rather than alphabetical order. Falls back to the accumulator tail if no per-run files exist.
+
+```bash
+python export_stats.py
+python export_stats.py --config /path/to/config.yaml
+python export_stats.py --output /path/to/output/dir
+```
 
 ---
 

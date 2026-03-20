@@ -176,22 +176,52 @@ def export(cfg: dict, output_dir: Path) -> None:
     print(f"[export] stats.json → {stats_file}  ({total_kits} kit hits)")
 
     # ── Write feed.txt ────────────────────────────────────────────────────────
-    # Serve the latest 1000 entries from the seen-URL accumulator (actual URLs,
-    # not defanged — suitable for tool ingestion).
+    # Serve the latest 1000 *recently first-seen* URLs by reading the
+    # per-run new_phishing_urls_*.txt files newest-first.  This avoids the
+    # alphabetical-tail bias of reading the sorted accumulator directly.
     feed_file = output_dir / "feed.txt"
-    if urls_file.exists():
+    new_url_files = sorted(
+        data_dir.glob("new_phishing_urls_*.txt"),
+        key=lambda p: p.name,
+        reverse=True,   # newest timestamp first
+    )
+    if new_url_files:
+        recent_urls: list[str] = []
+        seen_in_feed: set[str] = set()
+        for run_file in new_url_files:
+            if len(recent_urls) >= 1000:
+                break
+            with run_file.open(encoding="utf-8") as fh:
+                for line in fh:
+                    url = line.strip()
+                    if url and not url.startswith("#") and url not in seen_in_feed:
+                        seen_in_feed.add(url)
+                        recent_urls.append(url)
+                        if len(recent_urls) >= 1000:
+                            break
+        total_urls_seen_for_feed = total_urls_seen  # already counted above
+        with feed_file.open("w", encoding="utf-8") as fh:
+            fh.write(f"# phishnet.cc — Phishing URL Feed\n")
+            fh.write(f"# Updated: {now.isoformat(timespec='seconds')}\n")
+            fh.write(f"# Total tracked: {total_urls_seen_for_feed}\n")
+            fh.write(f"# Showing: latest {len(recent_urls)} (most recently seen first)\n#\n")
+            for url in recent_urls:
+                fh.write(url + "\n")
+        print(f"[export] feed.txt  → {feed_file}  ({len(recent_urls)} URLs, recency-ordered)")
+    elif urls_file.exists():
+        # Fallback: no per-run files yet — use accumulator tail (old behaviour)
         with urls_file.open(encoding="utf-8") as fh:
             all_urls = [l.strip() for l in fh if l.strip() and not l.startswith("#")]
         with feed_file.open("w", encoding="utf-8") as fh:
             fh.write(f"# phishnet.cc — Phishing URL Feed\n")
             fh.write(f"# Updated: {now.isoformat(timespec='seconds')}\n")
             fh.write(f"# Total tracked: {len(all_urls)}\n")
-            fh.write(f"# Showing: latest 1000\n#\n")
+            fh.write(f"# Showing: latest 1000 (alphabetical fallback — no per-run files found)\n#\n")
             for url in all_urls[-1000:]:
                 fh.write(url + "\n")
-        print(f"[export] feed.txt  → {feed_file}  ({min(len(all_urls), 1000)} URLs)")
+        print(f"[export] feed.txt  → {feed_file}  ({min(len(all_urls), 1000)} URLs, fallback)")
     else:
-        print("[export] feed.txt skipped — phishing_urls.txt not found")
+        print("[export] feed.txt skipped — no URL files found")
 
 
 def main() -> None:
