@@ -78,7 +78,8 @@ python collector.py --send-test-message
 |------|-------------|
 | `data/phishing_urls.txt` | Cumulative seen-URL list — **grows every run, never shrinks** |
 | `data/phishing_urls.txt.bak` | Previous run's list |
-| `data/new_phishing_urls_YYYYMMDD_HHMMSS.txt` | URLs new to this run — **kept forever**; used by `export_stats.py` to build a recency-ordered feed |
+| `data/new_phishing_urls_YYYYMMDD_HHMMSS.txt` | URLs new to this run — used by `export_stats.py` to build a recency-ordered feed; old files can be archived with `archive_new_urls.py` |
+| `data/archive_new_phishing/YYYY/MM/` | Old per-run files moved out of the way by `archive_new_urls.py` |
 | `data/phishnet.db` | SQLite database — **only kit-hit URLs** |
 | `data/kits/` | Downloaded phishing kit zip files |
 | `data/collector.log` | Log file (if configured) |
@@ -437,6 +438,22 @@ python export_stats.py --output /path/to/output/dir
 
 ---
 
+## Archiving old run files
+
+The collector writes one `new_phishing_urls_*.txt` per run, so `data/` fills up over time. `export_stats.py` only ever reads these files newest-first until the 1000-URL feed window is covered — older files are never touched. `archive_new_urls.py` moves those no-longer-needed files into `data/archive_new_phishing/YYYY/MM/` (keeping a safety margin of 5 extra files by default), without changing what `feed.txt` serves.
+
+```bash
+python archive_new_urls.py --dry-run    # show what would move
+python archive_new_urls.py              # archive with defaults
+
+# Tune the window / margin / location
+python archive_new_urls.py --data-dir ./data --feed-size 1000 --keep-extra 5
+```
+
+Safe to run from cron after `export_stats.py`; re-running when there is nothing to archive is a no-op.
+
+---
+
 ## Extracting kits
 
 `unpacker.sh` safely extracts kit archives, performing three checks before touching disk:
@@ -471,6 +488,7 @@ phishnet/
 ├── repair_db.py            # Re-crawl kit hits with missing/NULL fingerprinting fields
 ├── export_stats.py         # Generate stats.json + feed.txt for phishnet.cc dashboard
 ├── get_urlscan_phish.py    # Fetch phishing URLs from urlscan.io
+├── archive_new_urls.py     # Move old new_phishing_urls_*.txt into data/archive_new_phishing/
 ├── sort_kits.py            # Triage kit zips into sub-folders
 ├── unpacker.sh             # Safely extract kit zips
 ├── requirements.txt
@@ -479,6 +497,7 @@ phishnet/
     ├── phishing_urls.txt
     ├── phishing_urls.txt.bak
     ├── new_phishing_urls_YYYYMMDD_HHMMSS.txt
+    ├── archive_new_phishing/    # old per-run files, YYYY/MM/ (archive_new_urls.py)
     ├── collector.log
     └── kits/               # Downloaded kit zip files
         ├── potential_malware/   # after sort_kits.py
