@@ -863,7 +863,7 @@ def submit_urlscan(url: str, api_key: str, visibility: str = "public", tags: lis
         }
     except requests.exceptions.HTTPError as exc:
         log.warning("  urlscan.io submission failed for %s: %s — %s",
-                    url, exc, exc.response.text[:300] if exc.response else "")
+                    url, exc, exc.response.text[:300] if exc.response is not None else "")
         return {}
     except Exception as exc:
         log.warning("  urlscan.io submission failed for %s: %s", url, exc)

@@ -419,6 +419,8 @@ python get_urlscan_phish.py -o /tmp/urlscan.txt && \
 | `--size N` | 100 | Results per API page |
 | `--config FILE` | auto-detect | Path to config.yaml |
 
+Rate-limit responses (HTTP 429) are retried up to 3 times, honouring the API's reset header. If the fetch still aborts on an error, the script exits non-zero so shell pipelines (`&& python collector.py …`) don't run on incomplete data; partial results are written, but an existing output file is never overwritten with an empty one.
+
 ---
 
 ## Exporting stats

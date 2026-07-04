@@ -30,6 +30,7 @@ _CONFIG_CANDIDATES = [
 ]
 
 SEARCH_URL = "https://urlscan.io/api/v1/search/"
+MAX_429_RETRIES = 3
 
 
 def find_api_key(config_path: str | None) -> str:
@@ -38,7 +39,7 @@ def find_api_key(config_path: str | None) -> str:
     for path in candidates:
         if path.exists():
             try:
-                cfg = yaml.safe_load(path.read_text(encoding="utf-8"))
+                cfg = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
                 key = (cfg.get("urlscan") or {}).get("api_key") or ""
                 if key:
                     _log(f"API key loaded from {path}")
@@ -55,12 +56,25 @@ def _log(msg: str) -> None:
     print(f"[urlscan] {msg}", file=sys.stderr, flush=True)
 
 
+def _retry_wait(resp: requests.Response, attempt: int) -> float:
+    """Seconds to wait before retrying a 429, honouring the reset header."""
+    reset_after = resp.headers.get("X-Rate-Limit-Reset-After")
+    if reset_after:
+        try:
+            return min(float(reset_after) + 1, 120.0)
+        except ValueError:
+            pass
+    return min(15.0 * attempt, 120.0)
+
+
 def build_query(base: str, exclude_tags: list[str], days: int | None) -> str:
     """
     Combine the base query with tag exclusions and date range.
     Uses Elasticsearch Query String syntax supported by urlscan.
     """
-    parts = [base]
+    # Parenthesise the base query so user-supplied OR clauses don't bleed
+    # into the appended filters.
+    parts = [f"({base})"]
     for tag in exclude_tags:
         parts.append(f'NOT task.tags:"{tag}"')
     if days:
@@ -75,10 +89,11 @@ def fetch(
     query: str,
     page_size: int,
     max_results: int,
-) -> list[str]:
+) -> tuple[list[str], bool]:
     """
     Page through urlscan search results, returning up to max_results URLs.
     Uses `search_after` for cursor-based pagination.
+    Returns (urls, ok) — ok is False if the fetch aborted on an error.
     """
     headers: dict = {}
     if api_key:
@@ -86,6 +101,7 @@ def fetch(
 
     urls: list[str] = []
     search_after: str | None = None
+    retries_429 = 0
 
     while len(urls) < max_results:
         want = min(page_size, max_results - len(urls))
@@ -96,15 +112,24 @@ def fetch(
         try:
             resp = requests.get(SEARCH_URL, headers=headers, params=params, timeout=30)
             resp.raise_for_status()
+            data = resp.json()
         except requests.exceptions.HTTPError as exc:
-            body = exc.response.text[:300] if exc.response else ""
+            if (exc.response is not None and exc.response.status_code == 429
+                    and retries_429 < MAX_429_RETRIES):
+                retries_429 += 1
+                wait = _retry_wait(exc.response, retries_429)
+                _log(f"Rate limited (429) — waiting {wait:.0f}s "
+                     f"(retry {retries_429}/{MAX_429_RETRIES})")
+                time.sleep(wait)
+                continue
+            body = exc.response.text[:300] if exc.response is not None else ""
             _log(f"HTTP error: {exc} — {body}")
-            break
+            return urls, False
         except Exception as exc:
             _log(f"Request failed: {exc}")
-            break
+            return urls, False
 
-        data = resp.json()
+        retries_429 = 0
         results = data.get("results") or []
 
         if not results:
@@ -120,7 +145,9 @@ def fetch(
 
         _log(f"{len(urls)} URLs collected so far…")
 
-        if not data.get("has_more", False):
+        # NB: the API's `has_more` flag only says whether `total` is capped —
+        # it is NOT a pagination indicator. A short page means we're done.
+        if len(results) < want:
             _log("Reached end of results.")
             break
 
@@ -134,7 +161,7 @@ def fetch(
 
         time.sleep(0.5)   # be polite to the API
 
-    return urls
+    return urls, True
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -183,7 +210,7 @@ def main() -> None:
     _log(f"Query: {query}")
     _log(f"Max results: {args.max_results}  Page size: {args.size}")
 
-    raw_urls = fetch(api_key, query, args.size, args.max_results)
+    raw_urls, ok = fetch(api_key, query, args.size, args.max_results)
 
     # Deduplicate while preserving order
     seen: set[str] = set()
@@ -193,7 +220,12 @@ def main() -> None:
             seen.add(url)
             unique.append(url)
 
-    _log(f"Done — {len(unique)} unique URLs")
+    _log(f"Done — {len(unique)} unique URLs"
+         + ("" if ok else "  (fetch aborted early)"))
+
+    if not ok and not unique:
+        _log("Nothing fetched — leaving output untouched")
+        sys.exit(1)
 
     content = "\n".join(unique) + ("\n" if unique else "")
 
@@ -202,6 +234,9 @@ def main() -> None:
     else:
         Path(args.output).write_text(content, encoding="utf-8")
         _log(f"Saved → {args.output}")
+
+    if not ok:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
